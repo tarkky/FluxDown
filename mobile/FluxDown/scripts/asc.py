@@ -171,16 +171,12 @@ def add_to_groups(client: Client, app_id: str, build_id: str, names: list[str]) 
         group = by_name.get(name)
         if group is None:
             raise AscError(f"TestFlight group {name!r} not found (have: {sorted(by_name)})")
-        if group["attributes"].get("hasAccessToAllBuilds"):
-            # 自动分发组由 Apple 自动收录全部构建；手动 POST 会被 403 拒绝。
-            print(f"[asc] group {name!r} auto-distributes all builds, skipping manual add", flush=True)
-        else:
-            client.call(
-                "POST",
-                f"/v1/betaGroups/{group['id']}/relationships/builds",
-                {"data": [{"type": "builds", "id": build_id}]},
-            )
-            print(f"[asc] added build to group {name!r}", flush=True)
+        client.call(
+            "POST",
+            f"/v1/betaGroups/{group['id']}/relationships/builds",
+            {"data": [{"type": "builds", "id": build_id}]},
+        )
+        print(f"[asc] added build to group {name!r}", flush=True)
         external = external or not group["attributes"]["isInternalGroup"]
     return external
 
