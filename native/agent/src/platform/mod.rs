@@ -32,9 +32,6 @@ use fluxdown_protocol::PlatformIntegrationDto;
 pub use clipboard_seq::clipboard_change_count;
 pub use file_icon::file_icon_png;
 
-/// 两次「为待确认交互拉起桌面程序」之间的最小间隔：断线重连抖动也不重复拉起。
-pub const PROMPT_LAUNCH_COOLDOWN_MS: i64 = 10_000;
-
 /// 自启动条目传给 agent 的参数。
 pub const AUTOSTART_ARG: &str = "--autostart";
 
@@ -128,8 +125,12 @@ const DOWNLOADING_SUFFIX: &str = ".fdownloading";
 /// 用系统默认程序打开任务产物；最终文件尚不存在（下载中 / 暂停 / 已被移走）时报错，
 /// 不交给系统命令静默失败。
 pub fn open_task(task: &fluxdown_protocol::TaskDto) -> Result<(), PlatformError> {
-    let path = PathBuf::from(&task.save_dir).join(&task.file_name);
-    if task.file_name.is_empty() || !path.exists() {
+    open_task_file(Path::new(&task.save_dir), &task.file_name)
+}
+
+fn open_task_file(save_dir: &Path, file_name: &str) -> Result<(), PlatformError> {
+    let path = save_dir.join(file_name);
+    if file_name.is_empty() || !path.exists() {
         return Err(PlatformError::NotFound(path));
     }
     launch_path(&path, false)
@@ -137,8 +138,50 @@ pub fn open_task(task: &fluxdown_protocol::TaskDto) -> Result<(), PlatformError>
 
 /// 在文件管理器中定位任务；目标见 [`reveal_target`]。
 pub fn reveal_task(task: &fluxdown_protocol::TaskDto) -> Result<(), PlatformError> {
-    let (path, reveal) = reveal_target(Path::new(&task.save_dir), &task.file_name)?;
+    reveal_task_file(Path::new(&task.save_dir), &task.file_name)
+}
+
+fn reveal_task_file(save_dir: &Path, file_name: &str) -> Result<(), PlatformError> {
+    let (path, reveal) = reveal_target(save_dir, file_name)?;
     launch_path(&path, reveal)
+}
+
+/// 用系统默认的目录处理程序打开已存在的目录；不存在时报错，不交给系统命令静默失败。
+fn open_dir(dir: &Path) -> Result<(), PlatformError> {
+    if !dir.is_dir() {
+        return Err(PlatformError::NotFound(dir.to_path_buf()));
+    }
+    launch_path(dir, false)
+}
+
+/// 一次性系统打开模式（见 [`fluxdown_protocol::shell_open`]）。`args` 不含 argv[0]；首个参数
+/// 不是该模式的标志时返回 `None`（照常启动），否则执行并返回进程退出码——参数不合法也
+/// 不会落入常驻启动。
+#[must_use]
+pub fn run_shell_open(args: &[String]) -> Option<i32> {
+    use fluxdown_protocol::shell_open::{
+        EXIT_FAILED, EXIT_NOT_FOUND, EXIT_OK, EXIT_UNSUPPORTED, EXIT_USAGE, OPEN_DIR_ARG,
+        OPEN_TASK_ARG, REVEAL_TASK_ARG,
+    };
+
+    let (flag, rest) = args.split_first()?;
+    let outcome = match (flag.as_str(), rest) {
+        (OPEN_TASK_ARG, [save_dir, file_name]) => open_task_file(Path::new(save_dir), file_name),
+        (REVEAL_TASK_ARG, [save_dir, file_name]) => {
+            reveal_task_file(Path::new(save_dir), file_name)
+        }
+        (OPEN_DIR_ARG, [dir]) => open_dir(Path::new(dir)),
+        (OPEN_TASK_ARG | REVEAL_TASK_ARG | OPEN_DIR_ARG, _) => return Some(EXIT_USAGE),
+        _ => return None,
+    };
+    Some(match outcome {
+        Ok(()) => EXIT_OK,
+        Err(PlatformError::NotFound(_)) => EXIT_NOT_FOUND,
+        Err(PlatformError::Unsupported(_)) => EXIT_UNSUPPORTED,
+        Err(PlatformError::Io(_) | PlatformError::Failed(_) | PlatformError::InvalidScheme(_)) => {
+            EXIT_FAILED
+        }
+    })
 }
 
 /// 定位目标按优先级：最终产物 → 下载中临时文件 `<name>.fdownloading` → 保存目录本身
@@ -168,14 +211,17 @@ pub fn open_path(path: &Path, reveal: bool) -> Result<(), PlatformError> {
     launch_path(path, reveal)
 }
 
-/// 无 UI 客户端连接且距上次拉起不低于冷却时间，才需要为待确认交互拉起桌面程序。
-#[must_use]
-pub fn should_launch_for_prompt(ui_clients: usize, last_launch_ms: i64, now_ms: i64) -> bool {
-    ui_clients == 0 && now_ms.saturating_sub(last_launch_ms) >= PROMPT_LAUNCH_COOLDOWN_MS
-}
-
 /// 拉起同级桌面程序；桌面已在运行时新进程经单实例通道转发激活/链接后立即退出。
 pub fn launch_desktop(args: &[&str]) -> Result<(), PlatformError> {
+    launch_desktop_observed(args, || {})
+}
+
+/// 同 [`launch_desktop`]，另在桌面进程退出后（含把请求转发给已有主实例后退出）于回收线程
+/// 调用 `on_exit`；返回错误时进程没有启动，`on_exit` 不会被调用。
+pub fn launch_desktop_observed(
+    args: &[&str],
+    on_exit: impl FnOnce() + Send + 'static,
+) -> Result<(), PlatformError> {
     let executable = desktop_executable().ok_or(PlatformError::Unsupported(
         "fluxdown-desktop is not installed next to fluxdown-agent",
     ))?;
@@ -187,14 +233,16 @@ pub fn launch_desktop(args: &[&str]) -> Result<(), PlatformError> {
         .stderr(Stdio::null());
     detach_from_agent(&mut command);
     // The detached thread owns the child until wait completes.
-    drop(spawn_desktop_reaper(command)?);
+    drop(spawn_desktop_reaper(command, on_exit)?);
     Ok(())
 }
 
 /// Start the reaper first: thread-creation failure must not leave an unreaped child.
 /// Only spawning is synchronous; waiting never blocks the tray/controller or RPC caller.
+/// `on_exit` runs on the reaper thread once the spawned child has exited (never on spawn failure).
 fn spawn_desktop_reaper(
     mut command: std::process::Command,
+    on_exit: impl FnOnce() + Send + 'static,
 ) -> std::io::Result<std::thread::JoinHandle<Option<std::process::ExitStatus>>> {
     let (started, receiver) = std::sync::mpsc::sync_channel(1);
     let reaper = std::thread::Builder::new()
@@ -212,7 +260,7 @@ fn spawn_desktop_reaper(
             if started.send(Ok(())).is_err() {
                 tracing::warn!("desktop launch caller disconnected; still reaping its child");
             }
-            match child.wait() {
+            let status = match child.wait() {
                 Ok(status) => {
                     if !status.success() {
                         tracing::warn!(%status, "fluxdown-desktop exited unsuccessfully");
@@ -223,7 +271,9 @@ fn spawn_desktop_reaper(
                     tracing::warn!(%error, "failed to reap fluxdown-desktop");
                     None
                 }
-            }
+            };
+            on_exit();
+            status
         })?;
     receiver.recv().map_err(std::io::Error::other)??;
     Ok(reaper)
@@ -239,15 +289,6 @@ fn detach_from_agent(command: &mut std::process::Command) {
 #[cfg(not(unix))]
 fn detach_from_agent(command: &mut std::process::Command) {
     set_no_console_window(command);
-}
-
-#[must_use]
-pub fn now_unix_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
-        })
 }
 
 /// 当前系统集成状态快照。
@@ -822,7 +863,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn desktop_reaper_returns_before_exit_and_collects_status() {
+    fn desktop_reaper_returns_before_exit_and_reports_exit() {
         let dir = std::env::temp_dir().join(format!("fluxdown-reaper-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&dir).expect("create release gate directory");
         let release = dir.join("release");
@@ -837,8 +878,13 @@ mod tests {
             ])
             .arg(&release);
         detach_from_agent(&mut command);
-        let reaper = spawn_desktop_reaper(command).expect("spawn child and reaper");
+        let (exited_tx, exited) = std::sync::mpsc::channel();
+        let reaper = spawn_desktop_reaper(command, move || {
+            exited_tx.send(()).expect("report exit");
+        })
+        .expect("spawn child and reaper");
         let returned_before_exit = !reaper.is_finished();
+        let reported_before_exit = exited.try_recv().is_ok();
         std::fs::write(&release, []).expect("release child");
         let status = reaper
             .join()
@@ -846,16 +892,30 @@ mod tests {
             .expect("wait succeeded");
         std::fs::remove_dir_all(dir).expect("remove release gate directory");
         assert!(returned_before_exit, "launch must not wait for child exit");
+        assert!(
+            !reported_before_exit,
+            "exit is reported only after the child exits"
+        );
+        assert!(exited.try_recv().is_ok(), "exit is reported once reaped");
         assert_eq!(status.code(), Some(7), "collect the real child exit status");
     }
 
     #[test]
-    fn desktop_reaper_reports_spawn_failure() {
+    fn desktop_reaper_reports_spawn_failure_without_exit_callback() {
         let missing =
             std::env::temp_dir().join(format!("fluxdown-missing-{}", uuid::Uuid::new_v4()));
-        let error = spawn_desktop_reaper(std::process::Command::new(missing))
-            .expect_err("missing executable must fail synchronously");
+        let (exited_tx, exited) = std::sync::mpsc::channel();
+        let error = spawn_desktop_reaper(std::process::Command::new(missing), move || {
+            exited_tx.send(()).expect("report exit");
+        })
+        .expect_err("missing executable must fail synchronously");
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        // The callback is dropped with the reaper thread; it must never run for a child that
+        // never started, or launch bookkeeping would release the same slot twice.
+        assert!(
+            exited.recv().is_err(),
+            "spawn failure must not report an exit"
+        );
     }
 
     #[test]
@@ -947,20 +1007,9 @@ mod tests {
     }
 
     #[test]
-    fn prompt_launch_requires_no_ui_clients_and_cooldown_elapsed() {
-        assert!(should_launch_for_prompt(0, 0, 20_000));
-        assert!(!should_launch_for_prompt(1, 0, 20_000));
-        assert!(!should_launch_for_prompt(0, 15_000, 20_000));
-        assert!(should_launch_for_prompt(0, 0, 10_000));
-    }
-
-    #[test]
     fn reveal_target_prefers_final_then_temp_then_directory() {
-        let dir = std::env::temp_dir().join(format!(
-            "fluxdown-agent-reveal-{}-{}",
-            std::process::id(),
-            now_unix_ms()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("fluxdown-agent-reveal-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("create dir");
 
         // 暂停 / 下载中：只有临时文件。
@@ -988,5 +1037,61 @@ mod tests {
             reveal_target(&dir, "a.dmg"),
             Err(PlatformError::NotFound(path)) if path == dir
         ));
+    }
+
+    #[test]
+    fn shell_open_mode_claims_only_its_own_flags() {
+        use fluxdown_protocol::shell_open::{
+            EXIT_USAGE, OPEN_DIR_ARG, OPEN_TASK_ARG, REVEAL_TASK_ARG,
+        };
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run_shell_open(&[]), None);
+        assert_eq!(run_shell_open(&args(&[AUTOSTART_ARG])), None);
+        // 标志不在首位不是该模式：照常启动，不会误把普通参数当成打开请求。
+        assert_eq!(run_shell_open(&args(&["x", OPEN_DIR_ARG, "y"])), None);
+        // 保留标志即使参数个数不对也消费本次启动，绝不落入常驻启动。
+        for malformed in [
+            args(&[OPEN_TASK_ARG]),
+            args(&[OPEN_TASK_ARG, "dir", "name", "extra"]),
+            args(&[REVEAL_TASK_ARG, "dir"]),
+            args(&[OPEN_DIR_ARG]),
+            args(&[OPEN_DIR_ARG, "a", "b"]),
+        ] {
+            assert_eq!(
+                run_shell_open(&malformed),
+                Some(EXIT_USAGE),
+                "{malformed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shell_open_reports_missing_targets_before_touching_the_system() {
+        use fluxdown_protocol::shell_open::{
+            EXIT_NOT_FOUND, OPEN_DIR_ARG, OPEN_TASK_ARG, REVEAL_TASK_ARG,
+        };
+        let missing = std::env::temp_dir()
+            .join(format!("fluxdown-shell-open-{}", uuid::Uuid::new_v4()))
+            .display()
+            .to_string();
+        for args in [
+            [OPEN_TASK_ARG, missing.as_str(), "a.zip"].as_slice(),
+            // 文件名未知（尚未定名）的任务没有可打开的产物。
+            [OPEN_TASK_ARG, missing.as_str(), ""].as_slice(),
+            // 产物、临时文件、保存目录都不在：定位也报不存在，而不是打开无关目录。
+            [REVEAL_TASK_ARG, missing.as_str(), "a.zip"].as_slice(),
+            [OPEN_DIR_ARG, missing.as_str()].as_slice(),
+        ] {
+            let args = args
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(run_shell_open(&args), Some(EXIT_NOT_FOUND), "{args:?}");
+        }
     }
 }

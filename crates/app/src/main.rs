@@ -27,6 +27,8 @@ mod progress_windows;
 mod service_bootstrap;
 mod session;
 mod settings_port;
+#[cfg(windows)]
+mod shell_open;
 mod update_notices;
 mod windows;
 

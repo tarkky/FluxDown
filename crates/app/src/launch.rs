@@ -68,6 +68,13 @@ impl LaunchOptions {
             && self.urls.is_empty()
             && self.torrent_files.is_empty()
     }
+
+    /// 由 agent 拉起的确认 / 进度界面。agent 只在没有 UI 连接时这样拉起，此时仍持有单实例锁的
+    /// 旧实例多半正在退出：应等它释放锁后接替，而不是把请求转发给不会再处理的旧实例。
+    #[must_use]
+    pub fn agent_initiated(&self) -> bool {
+        self.capture_only || self.progress_task.is_some()
+    }
 }
 
 /// 「启动时最小化到托盘」偏好键（agent 偏好，与 agent 自启判定同一键）。

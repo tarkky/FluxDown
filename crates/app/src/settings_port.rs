@@ -24,4 +24,13 @@ impl SettingsPort for AgentSettingsPort {
     ) -> PortFuture<serde_json::Value> {
         self.client.call(method, Some(params))
     }
+
+    #[cfg(windows)]
+    fn foreground_open_directory(&self, path: &str) -> Option<PortFuture<serde_json::Value>> {
+        let path = path.to_owned();
+        Some(Box::pin(async move {
+            crate::shell_open::directory(path).await?;
+            Ok(serde_json::json!({ "ok": true }))
+        }))
+    }
 }

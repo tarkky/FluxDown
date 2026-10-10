@@ -11,11 +11,12 @@
 
 #[cfg(feature = "desktop")]
 pub mod host;
+mod prompt_launch;
 #[cfg(feature = "desktop")]
 mod tray_model;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use fluxdown_protocol::{
@@ -30,6 +31,7 @@ use crate::daemon_client::DaemonClient;
 use crate::event_hub::AgentEventHub;
 use crate::lifecycle::Lifecycle;
 use crate::power::PowerService;
+use prompt_launch::UiLaunches;
 
 /// 非驻留模式下没有 UI、也没有任何待处理工作多久后完全退出。
 const IDLE_EXIT_GRACE: Duration = Duration::from_secs(15);
@@ -137,12 +139,13 @@ pub struct ShellState {
     ui_clients: AtomicUsize,
     resident: AtomicBool,
     tray_visible: AtomicBool,
-    last_prompt_launch_ms: AtomicI64,
+    /// 为待确认交互 / 进度窗口拉起的桌面进程记账；回收线程在进程退出时更新。
+    launches: Arc<Mutex<UiLaunches>>,
     /// 本 agent 在当前 daemon 连接上是否已订阅选择请求。
     selection_subscribed: tokio::sync::Mutex<bool>,
     daemon: Arc<DaemonClient>,
     events: AgentEventHub,
-    changed: Notify,
+    changed: Arc<Notify>,
 }
 
 impl ShellState {
@@ -158,11 +161,11 @@ impl ShellState {
             ui_clients: AtomicUsize::new(0),
             resident: AtomicBool::new(status.resident),
             tray_visible: AtomicBool::new(status.tray_available && status.resident),
-            last_prompt_launch_ms: AtomicI64::new(0),
+            launches: Arc::new(Mutex::new(UiLaunches::default())),
             selection_subscribed: tokio::sync::Mutex::new(false),
             daemon,
             events,
-            changed: Notify::new(),
+            changed: Arc::new(Notify::new()),
         })
     }
 
@@ -183,13 +186,17 @@ impl ShellState {
         self.changed.notify_one();
     }
 
-    /// 官方 UI 断开。
+    /// 官方 UI 断开。最后一个 UI 断开后留静默期给重连，之后若仍有待确认交互由控制循环拉起界面。
     pub async fn ui_disconnected(&self) {
-        self.ui_clients
+        let previous = self
+            .ui_clients
             .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 Some(count.saturating_sub(1))
             })
             .unwrap_or_else(|_| panic!("UI client decrement always supplies an updated count"));
+        if previous <= 1 {
+            self.launches().ui_left(Instant::now());
+        }
         self.reconcile_selection(false).await;
         self.changed.notify_one();
     }
@@ -226,30 +233,44 @@ impl ShellState {
         }
     }
 
-    /// 为待确认的捕获 / 选择拉起界面：已有 UI 或冷却中则跳过。驻留模式只开确认窗口，
-    /// 非驻留模式开主窗口（没有界面就没有人承载接下来的下载）。
-    pub fn launch_for_prompt(&self) {
-        let now = crate::platform::now_unix_ms();
-        let last = self.last_prompt_launch_ms.load(Ordering::Acquire);
-        if !crate::platform::should_launch_for_prompt(self.ui_clients(), last, now) {
+    fn launches(&self) -> MutexGuard<'_, UiLaunches> {
+        self.launches.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// 待确认交互发生变化：确认拉起重新计数。
+    fn prompts_changed(&self) {
+        self.launches().prompts_changed();
+    }
+
+    /// 电平触发的确认拉起：有待确认交互、没有 UI 连接时，按 [`UiLaunches`] 的约束拉起界面。
+    /// 驻留模式只开确认窗口，非驻留模式开主窗口（没有界面就没有人承载接下来的下载）。
+    fn reconcile_prompt(&self, now: Instant) {
+        if self.ui_clients() > 0 {
             return;
         }
-        if self
-            .last_prompt_launch_ms
-            .compare_exchange(last, now, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
+        let tray_visible = self.tray_visible.load(Ordering::Acquire);
+        if !self
+            .events
+            .inspect(|snapshot| needs_prompt_ui(snapshot, tray_visible))
         {
             return;
         }
+        {
+            let mut launches = self.launches();
+            if !launches.prompt_due(now) {
+                return;
+            }
+            launches.begin_prompt(now);
+        }
         let args: &[&str] = if self.resident() { &["--capture"] } else { &[] };
-        if let Err(error) = crate::platform::launch_desktop(args) {
+        if let Err(error) = self.launch_tracked(args) {
             tracing::warn!(error = %error, "could not launch desktop for pending prompt");
         }
     }
 
     /// 静默捕获建成单个任务且没有 UI 连接时，拉起界面承载该任务的进度窗口（界面收到
-    /// `--progress-task` 后按用户开始处理）。进度窗口偏好关闭（`desktop.progress_window`
-    /// 为 false）或已有 UI（它会收到 `CaptureTasksStarted`）时不拉起；与确认拉起共用冷却。
+    /// `--progress-task` 后按用户开始处理；已有主实例时经单实例通道转交）。进度窗口偏好关闭
+    /// （`desktop.progress_window` 为 false）或已有 UI（它会收到 `CaptureTasksStarted`）时不拉起。
     pub fn launch_for_progress(&self, task_id: &str) {
         let enabled = self.events.inspect(|snapshot| {
             snapshot
@@ -259,27 +280,36 @@ impl ShellState {
                 .and_then(Value::as_bool)
                 .unwrap_or(true)
         });
-        if !enabled {
+        if !enabled || self.ui_clients() > 0 {
             return;
         }
-        let now = crate::platform::now_unix_ms();
-        let last = self.last_prompt_launch_ms.load(Ordering::Acquire);
-        if !crate::platform::should_launch_for_prompt(self.ui_clients(), last, now)
-            || self
-                .last_prompt_launch_ms
-                .compare_exchange(last, now, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-        {
-            return;
-        }
+        self.launches().begin_progress(Instant::now());
         let mut args = Vec::with_capacity(3);
         if self.resident() {
             args.push("--capture");
         }
         args.extend(["--progress-task", task_id]);
-        if let Err(error) = crate::platform::launch_desktop(&args) {
+        if let Err(error) = self.launch_tracked(&args) {
             tracing::warn!(error = %error, "could not launch desktop for progress window");
         }
+    }
+
+    /// 拉起已在 [`UiLaunches`] 登记的桌面进程；进程退出（或没能启动）时释放登记并唤醒控制循环
+    /// 重新判定。
+    fn launch_tracked(&self, args: &[&str]) -> Result<(), crate::platform::PlatformError> {
+        let launches = Arc::clone(&self.launches);
+        let changed = Arc::clone(&self.changed);
+        let launched = crate::platform::launch_desktop_observed(args, move || {
+            launches
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .finished();
+            changed.notify_one();
+        });
+        if launched.is_err() {
+            self.launches().finished();
+        }
+        launched
     }
 
     /// 显示（或新开）主窗口。
@@ -319,7 +349,7 @@ pub struct ShellServices {
     pub gateway: Arc<crate::gateway::GatewayService>,
 }
 
-/// 外壳控制循环：偏好 → 驻留 / 托盘展示；托盘动作；选择请求拉起；非驻留闲置退出。
+/// 外壳控制循环：偏好 → 驻留 / 托盘展示；托盘动作；待确认交互拉起界面；非驻留闲置退出。
 pub async fn run_controller(
     services: ShellServices,
     mut host: ShellHost,
@@ -357,6 +387,8 @@ pub async fn run_controller(
             frame = receiver.recv() => match frame {
                 Ok(frame) => handle_frame(&state, &frame.event).await,
                 Err(broadcast::error::RecvError::Lagged(_)) => {
+                    // 断档期间可能错过待确认交互的变化：按变化处理，确认拉起重新计数。
+                    state.prompts_changed();
                     state.reconcile_selection(true).await;
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
@@ -376,6 +408,10 @@ pub async fn run_controller(
             }
         }
         state.refresh().await;
+        // 完全退出流程中不再拉起界面：桌面进程会把刚关停的后台重新拉起来。
+        if !lifecycle.quit_requested() {
+            state.reconcile_prompt(Instant::now());
+        }
         #[cfg(feature = "desktop")]
         tray.update(&events);
     }
@@ -395,13 +431,16 @@ async fn handle_frame(state: &ShellState, event: &ServiceEvent) {
         return;
     };
     match event {
-        AgentEvent::Daemon(DaemonEvent::SelectionPending(_)) => {
-            if state.tray_visible.load(Ordering::Acquire) {
-                state.launch_for_prompt();
-            }
+        AgentEvent::PendingCapturesChanged(_)
+        | AgentEvent::Daemon(
+            DaemonEvent::SelectionPending(_) | DaemonEvent::SelectionResolved { .. },
+        ) => state.prompts_changed(),
+        // daemon 重连后选择订阅随旧连接丢失，必须补订；替换的快照可能带来新的选择请求。
+        AgentEvent::DaemonSnapshotReplaced(_) => {
+            state.prompts_changed();
+            state.reconcile_selection(true).await;
         }
-        // daemon 重连后选择订阅随旧连接丢失，必须补订。
-        AgentEvent::DaemonSnapshotReplaced(_) | AgentEvent::DaemonConnectionChanged(true) => {
+        AgentEvent::DaemonConnectionChanged(true) => {
             state.reconcile_selection(true).await;
         }
         _ => {}
@@ -532,6 +571,13 @@ fn snapshot_is_idle(snapshot: &AgentSnapshot) -> bool {
         && snapshot.power.armed_delay_secs.is_none()
 }
 
+/// 是否有必须由界面承载的待确认交互：外部捕获恒需要；引擎选择只在托盘驻留、由 agent 代为订阅
+/// 时才需要拉起界面（非驻留且无 UI 时 agent 不订阅，daemon 直接走默认值）。
+fn needs_prompt_ui(snapshot: &AgentSnapshot, tray_visible: bool) -> bool {
+    !snapshot.pending_captures.is_empty()
+        || (tray_visible && !snapshot.daemon.pending_selections.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -593,6 +639,34 @@ mod tests {
         snapshot.daemon.runtime_stats.retry_pending_tasks = 0;
         snapshot.power.armed_delay_secs = Some(0);
         assert!(!snapshot_is_idle(&snapshot));
+    }
+
+    #[test]
+    fn captures_always_need_ui_but_selections_only_with_visible_tray() {
+        let mut snapshot = AgentSnapshot::default();
+        assert!(!needs_prompt_ui(&snapshot, true));
+        snapshot.daemon.pending_selections.push(
+            serde_json::from_value(serde_json::json!({
+                "requestId": "selection-1",
+                "taskId": "task-1",
+                "kind": { "type": "hls", "options": [] },
+                "defaultChoice": { "kind": "hls", "index": 0 },
+                "deadlineUnixMs": 0,
+            }))
+            .expect("selection request"),
+        );
+        assert!(needs_prompt_ui(&snapshot, true));
+        assert!(!needs_prompt_ui(&snapshot, false));
+        snapshot.daemon.pending_selections.clear();
+        snapshot.pending_captures.push(
+            serde_json::from_value(serde_json::json!({
+                "transactionId": "capture-1",
+                "url": "https://example.com/a.zip",
+                "createdAtUnixMs": 0,
+            }))
+            .expect("pending capture"),
+        );
+        assert!(needs_prompt_ui(&snapshot, false));
     }
 
     #[tokio::test]

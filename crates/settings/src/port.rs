@@ -11,4 +11,9 @@ pub trait SettingsPort: Send + Sync {
         method: &'static str,
         params: serde_json::Value,
     ) -> PortFuture<serde_json::Value>;
+
+    /// 宿主需要由前台进程打开目录时返回执行 future；`None` 保留原有 agent RPC。
+    fn foreground_open_directory(&self, _path: &str) -> Option<PortFuture<serde_json::Value>> {
+        None
+    }
 }

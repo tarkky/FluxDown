@@ -264,10 +264,23 @@ impl DownloadsPort for AgentDownloadsPort {
                 DownloadsCommand::RemoteCommand(params) => {
                     (method::AGENT_REMOTE_COMMAND, serialize(params)?)
                 }
+                // Windows 由前台界面进程拉起一次性 agent 打开，系统才会把窗口置前（见 shell_open）。
+                #[cfg(windows)]
+                DownloadsCommand::OpenTask { task_id } => {
+                    crate::shell_open::task(&client, task_id, false).await?;
+                    return Ok(DownloadsResult::Unit);
+                }
+                #[cfg(windows)]
+                DownloadsCommand::RevealTask { task_id } => {
+                    crate::shell_open::task(&client, task_id, true).await?;
+                    return Ok(DownloadsResult::Unit);
+                }
+                #[cfg(not(windows))]
                 DownloadsCommand::OpenTask { task_id } => (
                     method::AGENT_PLATFORM_OPEN_TASK,
                     json!({ "taskId": task_id }),
                 ),
+                #[cfg(not(windows))]
                 DownloadsCommand::RevealTask { task_id } => (
                     method::AGENT_PLATFORM_REVEAL_TASK,
                     json!({ "taskId": task_id }),

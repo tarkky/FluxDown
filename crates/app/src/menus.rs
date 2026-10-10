@@ -265,5 +265,13 @@ pub fn request_quit(cx: &mut App) {
 fn open_logs_folder(cx: &mut App) {
     // 桌面端自身日志目录本地已知；agent 不可达时日志入口恰是最需要的。
     let dir = crate::app::agent_data_dir().join("logs");
+    #[cfg(not(windows))]
     cx.reveal_path(&dir);
+    #[cfg(windows)]
+    cx.spawn(async move |_| {
+        if let Err(error) = crate::shell_open::directory(dir.to_string_lossy().into_owned()).await {
+            log::warn!("could not open desktop log directory: {error:?}");
+        }
+    })
+    .detach();
 }

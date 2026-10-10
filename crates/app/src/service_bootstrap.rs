@@ -161,25 +161,30 @@ const MACOS_AGENT_HELPER_EXE: &str = "Contents/MacOS/fluxdown-agent";
 /// `exited-with-subordinates` 保留其图标，直到托盘驻留的 agent 退出。`open` 在辅助
 /// App 已运行时不会再起第二个实例，`-g` 不抢前台。
 fn agent_command() -> Result<std::process::Command, std::io::Error> {
-    if let Some(path) = std::env::var_os("FLUXDOWN_AGENT_BIN") {
-        let mut command = std::process::Command::new(path);
-        detach_background_process(&mut command);
-        return Ok(command);
-    }
-    let current = std::env::current_exe()?;
     #[cfg(target_os = "macos")]
-    if let Some(helper_app) = bundled_agent_app(&current) {
+    if std::env::var_os("FLUXDOWN_AGENT_BIN").is_none()
+        && let Some(helper_app) = bundled_agent_app(&std::env::current_exe()?)
+    {
         let mut command = std::process::Command::new("/usr/bin/open");
         command.arg("-g").arg(helper_app);
         return Ok(command);
     }
-    let mut command = std::process::Command::new(current.with_file_name(if cfg!(windows) {
+    let mut command = std::process::Command::new(agent_executable()?);
+    detach_background_process(&mut command);
+    Ok(command)
+}
+
+/// agent 可执行文件：`FLUXDOWN_AGENT_BIN` 覆盖，否则取桌面程序同级（macOS 打包布局由
+/// [`agent_command`] 经辅助 bundle 启动，不走这里）。
+pub(crate) fn agent_executable() -> Result<std::path::PathBuf, std::io::Error> {
+    if let Some(path) = std::env::var_os("FLUXDOWN_AGENT_BIN") {
+        return Ok(path.into());
+    }
+    Ok(std::env::current_exe()?.with_file_name(if cfg!(windows) {
         "fluxdown-agent.exe"
     } else {
         "fluxdown-agent"
-    }));
-    detach_background_process(&mut command);
-    Ok(command)
+    }))
 }
 
 /// 桌面程序位于 `<App>.app/Contents/MacOS/` 且辅助 bundle 内存在 agent 时返回辅助

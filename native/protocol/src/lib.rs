@@ -14,6 +14,7 @@ pub mod handshake;
 pub mod method;
 pub mod rpc;
 pub mod settings;
+pub mod shell_open;
 pub mod task_activity;
 pub use task_activity::{
     TaskActivityDto, TaskActivityPage, TaskActivityQuery, TaskRuntimeDto, TaskSegmentDto,

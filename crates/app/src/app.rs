@@ -37,6 +37,10 @@ const ACTIVATION_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 /// `--after-update`：旧桌面进程随 agent 整体退出而退出，等它释放单实例锁的最长时间与轮询间隔。
 const AFTER_UPDATE_LOCK_WAIT: Duration = Duration::from_secs(30);
 const AFTER_UPDATE_LOCK_INTERVAL: Duration = Duration::from_millis(100);
+/// agent 拉起的确认 / 进度界面（`--capture` / `--progress-task`）等旧主实例释放单实例锁的最长
+/// 时间：agent 只在没有 UI 连接时拉起，正在退出的旧实例会在此期间释放；仍在运行（只是在重连
+/// agent）的旧实例则超时后照常接收转发。
+const AGENT_LAUNCH_LOCK_WAIT: Duration = Duration::from_secs(5);
 
 /// 桌面入口完成后的进程语义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,8 +134,15 @@ pub(crate) fn run() -> Result<RunOutcome, AppError> {
         files: launch.torrent_files.clone(),
         activate: launch.activate_existing || !launch.capture_only,
         settings: launch.settings,
+        progress_task: launch.progress_task.clone(),
     };
-    let lock_wait = launch.after_update.then_some(AFTER_UPDATE_LOCK_WAIT);
+    let lock_wait = if launch.after_update {
+        Some(AFTER_UPDATE_LOCK_WAIT)
+    } else if launch.agent_initiated() {
+        Some(AGENT_LAUNCH_LOCK_WAIT)
+    } else {
+        None
+    };
     let _instance_lock = match acquire_or_activate(
         &instance_dir,
         &endpoint,
@@ -336,6 +347,9 @@ pub(crate) fn run() -> Result<RunOutcome, AppError> {
                         });
                         crate::lifecycle::keep_alive(cx, task).detach();
                     }
+                    if let Some(task_id) = message.progress_task {
+                        crate::progress_windows::user_started_on_launch(task_id, cx);
+                    }
                     if message.settings {
                         crate::windows::settings::open(cx);
                     } else if message.activate {
@@ -390,8 +404,9 @@ pub(crate) fn run() -> Result<RunOutcome, AppError> {
 
     Ok(RunOutcome::Completed)
 }
-/// `lock_wait` 为 `Some`（`--after-update`）时先轮询等待旧主实例释放锁，而不是把请求转发给
-/// 正在退出的旧主实例；超时后回退到常规的转发 / 重试路径。
+/// `lock_wait` 为 `Some`（`--after-update`、agent 拉起的确认 / 进度界面）时先轮询等待旧主实例
+/// 释放锁，而不是把请求转发给正在退出的旧主实例（它不会再处理请求）；超时后回退到常规的转发 /
+/// 重试路径。
 fn acquire_or_activate(
     instance_dir: &Path,
     endpoint: &Endpoint,

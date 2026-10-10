@@ -8,6 +8,10 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> fluxdown_agent::runtime::AgentResult {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // 桌面界面进程为前台打开文件 / 文件夹拉起的一次性进程：不初始化日志 / 运行时，执行后即退出。
+    if let Some(code) = fluxdown_agent::platform::run_shell_open(&args) {
+        std::process::exit(code);
+    }
     #[cfg(windows)]
     if let Some(result) = fluxdown_agent::notification::handle_activation(&args) {
         fluxdown_agent::logging::init_desktop();
