@@ -384,8 +384,7 @@ fn notice(id: &str, event: &str) -> TaskNoticeDto {
 
 #[tokio::test]
 async fn matching_notices_are_trimmed_batched_and_update_usage() {
-    let fixture =
-        Fixture::start(on(), overview_json(&["task.completed", "task.failed"])).await;
+    let fixture = Fixture::start(on(), overview_json(&["task.completed", "task.failed"])).await;
     fixture.send(notice("d1", "task.completed")).await;
     fixture.send(notice("d2", "task.failed")).await;
     // 未订阅的事件不入队。
@@ -594,8 +593,7 @@ async fn task_notice_is_never_forwarded_to_ui_subscribers() {
 
 #[tokio::test]
 async fn catalog_is_pulled_anonymously_at_startup_even_when_logged_out() {
-    let fixture =
-        Fixture::start_with(on(), overview_json(&["task.completed"]), false, false).await;
+    let fixture = Fixture::start_with(on(), overview_json(&["task.completed"]), false, false).await;
     fixture.wait_catalog(Some(&["email", "telegram"])).await;
     assert_eq!(fixture.mock.catalog_authed_calls.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.mock.overview_calls.load(Ordering::SeqCst), 0);
@@ -611,8 +609,7 @@ async fn catalog_is_pulled_anonymously_at_startup_even_when_logged_out() {
 #[tokio::test]
 async fn failed_catalog_fetch_keeps_unknown_and_get_retries_until_known() {
     // 启动拉取失败：目录保持 None（未知），不覆盖概览。
-    let fixture =
-        Fixture::start_with(on(), overview_json(&["task.completed"]), true, true).await;
+    let fixture = Fixture::start_with(on(), overview_json(&["task.completed"]), true, true).await;
     assert_eq!(fixture.catalog_kinds(), None);
     assert!(fixture.service.current().overview.is_some());
     assert_eq!(fixture.service.current().last_error_reason, None);
