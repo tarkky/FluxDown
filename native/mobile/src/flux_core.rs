@@ -3,7 +3,7 @@
 //! 所有会话驱动、daemon、agent 都跑在这个 runtime 上；暴露给宿主语言的 async 方法只
 //! `spawn` 到它并等待 `JoinHandle`，因此不依赖宿主侧 future 执行器的 tokio 上下文。
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use tokio::runtime::{Builder, Handle, Runtime};
 use tokio::sync::Mutex;
@@ -14,6 +14,7 @@ use crate::error::FluxError;
 use crate::local::{LocalHost, LocalHostConfig};
 use crate::remote::RemoteConnector;
 use crate::session::{HostSession, open_session};
+use crate::update::{AppUpdateConfig, AppUpdater};
 
 #[derive(uniffi::Object)]
 pub struct FluxCore {
@@ -21,6 +22,7 @@ pub struct FluxCore {
     /// runtime 会 panic。
     runtime: Option<Runtime>,
     local: Arc<Mutex<Option<LocalHost>>>,
+    updater: OnceLock<Arc<AppUpdater>>,
 }
 
 impl FluxCore {
@@ -68,6 +70,7 @@ impl FluxCore {
         Ok(Arc::new(Self {
             runtime: Some(runtime),
             local: Arc::new(Mutex::new(None)),
+            updater: OnceLock::new(),
         }))
     }
 
@@ -119,6 +122,15 @@ impl FluxCore {
             Ok(session)
         })
         .await
+    }
+
+    /// App 自更新器（进程内唯一；首次调用的 `config` 生效）。与主机会话无关。
+    pub fn app_updater(&self, config: AppUpdateConfig) -> Result<Arc<AppUpdater>, FluxError> {
+        let handle = self.handle()?.clone();
+        Ok(Arc::clone(
+            self.updater
+                .get_or_init(|| Arc::new(AppUpdater::new(handle, config))),
+        ))
     }
 
     /// 停止本机主机（若在运行）：先放开所有本机会话，再停 agent 与 daemon。

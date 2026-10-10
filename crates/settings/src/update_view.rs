@@ -1,7 +1,8 @@
 //! 应用内更新状态 → 文案键与可用操作的纯判定。
 //!
 //! 设置「关于」页与 app 层的更新通知共用，保证两处对同一份 `UpdateStatusDto` 给出一致的
-//! 状态文本与按钮；agent 是状态唯一来源，这里不保存任何状态。
+//! 状态文本与按钮；agent 是状态唯一来源，这里不保存任何状态。改动须同步镜像
+//! `web/src/lib/update.ts` 与原生 Android `mobile/Android/core/.../update/UpdateView.kt`。
 
 use fluxdown_protocol::{
     UpdateFailure, UpdateInstallKind, UpdateManualReason, UpdatePhase, UpdateStatusDto,

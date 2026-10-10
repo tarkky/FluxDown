@@ -531,6 +531,7 @@ export type UpdateInstallKind =
   | 'synology'
   | 'qnap'
   | 'openwrt'
+  | 'androidApk'
   | 'unknown';
 
 export type UpdateManualReason =

@@ -50,22 +50,57 @@ const DESKTOP_BIN: &str = if cfg!(windows) {
     "fluxdown-desktop"
 };
 
-/// `/api/release` 的资产来自桌面包还是服务器包（同时决定校验和哨兵名）。
+/// `/api/release` 的资产来自桌面包、服务器包还是移动端包（同时决定校验和哨兵名）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReleaseComponent {
     Desktop,
     Server,
+    Mobile,
 }
 
+/// 本机安装形态：资产选择、校验和来源与安装路径。
 #[derive(Clone, Debug)]
-pub(crate) struct InstallTarget {
-    pub kind: UpdateInstallKind,
-    /// `/api/release` 中取顶层 `assets`（Desktop）还是 `server.assets`（Server）。
-    pub component: ReleaseComponent,
+pub struct InstallTarget {
+    pub(crate) kind: UpdateInstallKind,
+    /// `/api/release` 中取顶层 `assets`（Desktop）、`server.assets` 还是 `mobile.assets`。
+    pub(crate) component: ReleaseComponent,
     /// 资产键，按优先级（如 `["macos_dmg_arm64", "macos_tarball_arm64"]`）；空 = 本平台无资产。
-    pub asset_keys: Vec<&'static str>,
+    pub(crate) asset_keys: Vec<&'static str>,
     /// 无需触盘即可确定的不可自更新原因。
-    pub manual_reason: Option<UpdateManualReason>,
+    pub(crate) manual_reason: Option<UpdateManualReason>,
+}
+
+impl InstallTarget {
+    /// Android APK：按设备 ABI 偏好（`Build.SUPPORTED_ABIS` 顺序）取第一个有分包的 ABI，
+    /// 并以 universal 包兜底；安装由宿主语言执行（PackageInstaller），见
+    /// [`super::UpdateService::delegated`]。
+    #[must_use]
+    pub fn android(supported_abis: &[String], manual_reason: Option<UpdateManualReason>) -> Self {
+        let mut asset_keys = Vec::with_capacity(2);
+        if let Some(key) = supported_abis
+            .iter()
+            .find_map(|abi| android_abi_asset_key(abi))
+        {
+            asset_keys.push(key);
+        }
+        asset_keys.push("android_universal");
+        Self {
+            kind: UpdateInstallKind::AndroidApk,
+            component: ReleaseComponent::Mobile,
+            asset_keys,
+            manual_reason,
+        }
+    }
+}
+
+/// Android ABI → `/api/release` 的 `mobile.assets` 键（发布只出这三个 ABI 的分包）。
+fn android_abi_asset_key(abi: &str) -> Option<&'static str> {
+    match abi.trim() {
+        "arm64-v8a" => Some("android_arm64"),
+        "armeabi-v7a" => Some("android_armv7"),
+        "x86_64" => Some("android_x64"),
+        _ => None,
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -148,6 +183,10 @@ pub(crate) async fn preflight(target: &InstallTarget) -> Option<UpdateManualReas
         return Some(reason);
     }
     let kind = target.kind;
+    // APK 由系统安装器写入，安装可行性已由宿主语言在构造目标时判定（`manual_reason`）。
+    if kind == UpdateInstallKind::AndroidApk {
+        return None;
+    }
     #[cfg(target_os = "linux")]
     if matches!(
         kind,

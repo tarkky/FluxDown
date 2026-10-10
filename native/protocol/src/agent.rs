@@ -1141,6 +1141,8 @@ pub enum UpdateInstallKind {
     Synology,
     Qnap,
     Openwrt,
+    /// Android APK（官网分发）：由 App 经系统安装器（PackageInstaller）安装。
+    AndroidApk,
     #[default]
     #[serde(other)]
     Unknown,

@@ -19,6 +19,7 @@ mod projection;
 mod remote;
 pub mod sections;
 mod session;
+mod update;
 
 #[cfg(test)]
 mod flow_tests;
@@ -35,5 +36,9 @@ pub use error::{ErrorCodeDto, FluxError, HostErrorDto};
 pub use flux_core::FluxCore;
 pub use local::LocalHostConfig;
 pub use session::HostSession;
+pub use update::{
+    AppReleaseNoteDto, AppUpdateConfig, AppUpdateSignalDto, AppUpdateStatusDto, AppUpdater,
+    UpdateFailureDto, UpdateManualReasonDto, UpdatePhaseDto,
+};
 
 uniffi::setup_scaffolding!();

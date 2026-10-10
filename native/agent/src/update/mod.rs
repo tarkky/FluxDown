@@ -1,7 +1,9 @@
 //! 应用内更新：检查 → 后台下载并校验 → 一键安装并重启。
 //!
-//! `UpdateService` 独占 `UpdateStatusDto`，经 `AgentEvent::UpdateChanged` 发布（相同状态去重，
-//! 下载进度节流）。状态迁移：
+//! `UpdateService` 独占 `UpdateStatusDto`，经宿主发布（相同状态去重，下载进度节流）：
+//! 桌面 / headless agent 发 `AgentEvent::UpdateChanged` 并在本进程替换程序文件；
+//! 原生 Android（[`UpdateService::delegated`]）把状态与安装请求交给 [`UpdateDelegate`]，
+//! 由 App 经系统安装器完成安装。状态迁移：
 //!
 //! ```text
 //! Idle/UpToDate/Available/Failed --check--> Checking --> UpToDate | Available | Failed(Network)
@@ -29,10 +31,11 @@ use fluxdown_protocol::{
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use self::download::{DownloadError, DownloadSpec, download_verified};
-pub(crate) use self::install::InstallTarget;
+pub use self::install::InstallTarget;
 use self::release::{
     ChangelogResponse, ComponentRelease, Endpoint, RELEASE_PAGE_URL, RawRelease,
     checksum_file_names, find_checksum, normalize_channel,
@@ -49,7 +52,7 @@ const PENDING_FILE: &str = "pending.json";
 const PREF_AUTO_CHECK: &str = "general.auto_check_update";
 const PREF_CHANNEL: &str = "general.update_channel";
 
-/// 构造 `UpdateService` 所需的依赖。
+/// 构造桌面 / headless `UpdateService` 所需的依赖。
 pub struct UpdateParts {
     pub events: AgentEventHub,
     /// agent 数据目录；更新包落在其 `updates/` 下。
@@ -57,6 +60,39 @@ pub struct UpdateParts {
     pub(crate) target: InstallTarget,
     /// 安装成功后触发完全退出（带重启语义）。
     pub request_restart: Box<dyn Fn() + Send + Sync>,
+}
+
+/// 由宿主语言安装更新的宿主（原生 Android）。
+pub trait UpdateDelegate: Send + Sync + 'static {
+    /// 状态变化（已去重、下载进度已节流）。在服务内部锁内调用：实现必须立即返回，
+    /// 不得阻塞或回调 `UpdateService`。
+    fn status_changed(&self, status: &UpdateStatusDto);
+    /// 已校验的安装包就绪且用户已确认安装：宿主发起系统安装。失败 / 取消经
+    /// [`UpdateService::install_failed`] 回报；成功时系统替换应用并结束进程。
+    fn install_package(&self, package: &Path, version: &str);
+}
+
+/// 构造 [`UpdateService::delegated`] 所需的依赖。
+pub struct DelegatedParts {
+    /// 应用私有目录；更新包落在其 `updates/` 下。
+    pub data_dir: PathBuf,
+    /// 已安装的应用版本（Android `versionName`）。
+    pub current_version: String,
+    pub target: InstallTarget,
+    pub delegate: Arc<dyn UpdateDelegate>,
+    /// 请求的 User-Agent 产品名（如 `fluxdown-android`）。
+    pub user_agent_product: &'static str,
+}
+
+/// 状态发布与安装执行的宿主差异。
+enum Host {
+    /// 桌面 / headless agent：状态进事件总线，安装在本进程替换程序文件后重启。
+    Agent {
+        events: AgentEventHub,
+        request_restart: Box<dyn Fn() + Send + Sync>,
+    },
+    /// 宿主语言执行安装（Android PackageInstaller）。
+    Delegated(Arc<dyn UpdateDelegate>),
 }
 
 /// 可安装的更新候选。
@@ -93,6 +129,9 @@ struct PendingRecord {
     from_version: String,
     asset_name: String,
     created_at_ms: u64,
+    /// 发起安装时的渠道：未完成时据此重新检查（旧记录缺省为空 → 回退偏好 / 稳定版）。
+    #[serde(default)]
+    channel: String,
 }
 
 /// 一次检查的结果。
@@ -106,14 +145,13 @@ struct CheckOutcome {
 }
 
 pub struct UpdateService {
-    events: AgentEventHub,
+    host: Host,
     current_version: String,
     updates_dir: PathBuf,
     target: InstallTarget,
     endpoint: Endpoint,
     api_http: LazyHttpClient,
     download_http: LazyHttpClient,
-    request_restart: Box<dyn Fn() + Send + Sync>,
     core: Mutex<Core>,
     /// 检查单飞。
     check_gate: AsyncMutex<()>,
@@ -173,8 +211,53 @@ impl UpdateService {
         })
     }
 
+    /// 宿主语言安装的应用（原生 Android）：检查 / 下载 / 校验与桌面同一状态机，
+    /// 安装交给 [`UpdateDelegate::install_package`]。不可解析的版本（开发构建）只能手动升级。
+    #[must_use]
+    pub fn delegated(parts: DelegatedParts) -> Self {
+        Self::delegated_with(parts, Endpoint::resolve())
+    }
+
+    fn delegated_with(parts: DelegatedParts, endpoint: Endpoint) -> Self {
+        let mut target = parts.target;
+        if target.manual_reason.is_none()
+            && is_newer(&parts.current_version, &parts.current_version).is_err()
+        {
+            target.manual_reason = Some(UpdateManualReason::UnofficialBuild);
+        }
+        Self::build(
+            Host::Delegated(parts.delegate),
+            &parts.data_dir,
+            target,
+            &parts.current_version,
+            endpoint,
+            parts.user_agent_product,
+        )
+    }
+
     fn with_version(parts: UpdateParts, current_version: &str, endpoint: Endpoint) -> Self {
-        let user_agent = format!("fluxdown-agent/{current_version}");
+        Self::build(
+            Host::Agent {
+                events: parts.events,
+                request_restart: parts.request_restart,
+            },
+            &parts.data_dir,
+            parts.target,
+            current_version,
+            endpoint,
+            "fluxdown-agent",
+        )
+    }
+
+    fn build(
+        host: Host,
+        data_dir: &Path,
+        target: InstallTarget,
+        current_version: &str,
+        endpoint: Endpoint,
+        product: &str,
+    ) -> Self {
+        let user_agent = format!("{product}/{current_version}");
         let api_agent = user_agent.clone();
         let api_http = LazyHttpClient::new(move || {
             reqwest::Client::builder()
@@ -189,16 +272,15 @@ impl UpdateService {
                 .read_timeout(Duration::from_secs(30))
                 .user_agent(user_agent.clone())
         });
-        let status = initial_status_for(current_version, &parts.target);
+        let status = initial_status_for(current_version, &target);
         Self {
-            events: parts.events,
+            host,
             current_version: current_version.to_owned(),
-            updates_dir: parts.data_dir.join("updates"),
-            target: parts.target,
+            updates_dir: data_dir.join("updates"),
+            target,
             endpoint,
             api_http,
             download_http,
-            request_restart: parts.request_restart,
             core: Mutex::new(Core {
                 published: status.clone(),
                 status,
@@ -214,13 +296,14 @@ impl UpdateService {
     }
 
     /// 启动后台任务：清理上次替换残留、对账 `pending.json`，`auto_check` 时进入周期检查。
+    /// 只用于 agent 宿主；委托宿主由 App 自行调度并调用 [`Self::reconcile`]。
     pub fn start(self: &Arc<Self>, cancel: CancellationToken, auto_check: bool) {
         let service = Arc::clone(self);
         tokio::spawn(async move {
             if let Err(error) = tokio::task::spawn_blocking(install::cleanup_leftovers).await {
                 tracing::debug!(error = %error, "update leftover cleanup task failed");
             }
-            service.reconcile_pending().await;
+            service.reconcile().await;
             if auto_check {
                 service.periodic(cancel).await;
             }
@@ -242,8 +325,12 @@ impl UpdateService {
     fn commit(&self, core: &mut Core) {
         if core.status != core.published {
             core.published = core.status.clone();
-            self.events
-                .publish(AgentEvent::UpdateChanged(core.status.clone()));
+            match &self.host {
+                Host::Agent { events, .. } => {
+                    events.publish(AgentEvent::UpdateChanged(core.status.clone()));
+                }
+                Host::Delegated(delegate) => delegate.status_changed(&core.status),
+            }
         }
     }
 
@@ -310,7 +397,12 @@ impl UpdateService {
         };
         match self.fetch_outcome(channel).await {
             Ok(outcome) => Ok(self.mutate(|core| {
-                apply_outcome(core, outcome, &self.target);
+                apply_outcome(
+                    core,
+                    outcome,
+                    &self.target,
+                    self.endpoint.release_page_url(),
+                );
                 core.status.clone()
             })),
             Err(error) => {
@@ -335,7 +427,7 @@ impl UpdateService {
 
     async fn fetch_outcome(&self, channel: &str) -> Result<CheckOutcome, UpdateError> {
         let http = self.api_http.get().await?;
-        let raw: RawRelease = get_json(http, &self.endpoint.release_url(channel)).await?;
+        let raw = self.fetch_release(http, channel).await?;
         let Some(release) = raw.component(&self.target, &self.endpoint) else {
             return Ok(CheckOutcome {
                 release: None,
@@ -393,6 +485,62 @@ impl UpdateService {
             manual_url,
             candidate,
         })
+    }
+
+    /// 错峰竞速请求各官方站点的 `/api/release`：上次成功的站点先发，[`Endpoint::stagger`]
+    /// 内无结果（或已失败）才发下一个；首个成功者胜出并成为后续请求的站点。全部失败返回
+    /// 最先完成的错误。
+    async fn fetch_release(
+        &self,
+        http: &reqwest::Client,
+        channel: &str,
+    ) -> Result<RawRelease, UpdateError> {
+        let mut queue = self.endpoint.attempt_order().into_iter();
+        let mut attempts = JoinSet::new();
+        let mut first_error = None;
+        let spawn = |attempts: &mut JoinSet<_>, index: usize| {
+            let Some(url) = self.endpoint.release_url_at(index, channel) else {
+                return;
+            };
+            let http = http.clone();
+            attempts.spawn(async move { (index, get_json::<RawRelease>(&http, &url).await) });
+        };
+        if let Some(index) = queue.next() {
+            spawn(&mut attempts, index);
+        }
+        loop {
+            let more = queue.len() > 0;
+            tokio::select! {
+                joined = attempts.join_next() => {
+                    let result = match joined {
+                        Some(Ok((index, result))) => result.map(|raw| (index, raw)),
+                        Some(Err(error)) => Err(UpdateError::Decode(format!("release request task failed: {error}"))),
+                        None => Err(UpdateError::Decode("no update site configured".to_owned())),
+                    };
+                    match result {
+                        Ok((index, raw)) => {
+                            self.endpoint.set_active(index);
+                            return Ok(raw);
+                        }
+                        Err(error) => {
+                            tracing::debug!(error = %error, "update site request failed");
+                            let error = first_error.take().unwrap_or(error);
+                            if let Some(index) = queue.next() {
+                                spawn(&mut attempts, index);
+                            } else if attempts.is_empty() {
+                                return Err(error);
+                            }
+                            first_error = Some(error);
+                        }
+                    }
+                }
+                () = tokio::time::sleep(self.endpoint.stagger()), if more => {
+                    if let Some(index) = queue.next() {
+                        spawn(&mut attempts, index);
+                    }
+                }
+            }
+        }
     }
 
     /// 组件哨兵优先，回退合并清单；都没有该资产的条目 → `None`。
@@ -642,37 +790,88 @@ impl UpdateService {
     async fn install_task(self: Arc<Self>, candidate: Candidate) {
         let dir = self.version_dir(&candidate.version);
         let package = dir.join(&candidate.asset_name);
-        let work_dir = dir.join("staging");
-        if let Err(error) = self.prepare_install(&candidate, &work_dir).await {
-            self.fail(UpdateFailure::Storage, format!("{error:#}"));
-            return;
-        }
-        match install::apply(&self.target, &package, &work_dir).await {
-            Ok(plan) => {
-                restart::schedule(plan);
-                (self.request_restart)();
+        match &self.host {
+            Host::Agent {
+                request_restart, ..
+            } => {
+                let work_dir = dir.join("staging");
+                if let Err(error) = self.prepare_install(&candidate, Some(&work_dir)).await {
+                    self.fail(UpdateFailure::Storage, format!("{error:#}"));
+                    return;
+                }
+                match install::apply(&self.target, &package, &work_dir).await {
+                    Ok(plan) => {
+                        restart::schedule(plan);
+                        request_restart();
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "update install failed");
+                        self.remove_pending().await;
+                        self.fail(error.failure(), format!("{error:#}"));
+                    }
+                }
             }
-            Err(error) => {
-                tracing::warn!(error = %error, "update install failed");
-                self.remove_pending().await;
-                self.fail(error.failure(), format!("{error:#}"));
+            Host::Delegated(delegate) => {
+                if let Err(error) = self.prepare_install(&candidate, None).await {
+                    self.fail(UpdateFailure::Storage, format!("{error:#}"));
+                    return;
+                }
+                delegate.install_package(&package, &candidate.version);
             }
         }
     }
 
-    /// 写 `pending.json` 并重建空的暂存目录。
-    async fn prepare_install(&self, candidate: &Candidate, work_dir: &Path) -> std::io::Result<()> {
+    /// 委托宿主回报安装失败或用户取消；`Installing` 之外的回报忽略。校验类失败（签名 /
+    /// 包名 / 版本不符）同时丢弃该版本的安装包，重试时重新下载而不是复用同一个坏包。
+    pub async fn install_failed(&self, failure: UpdateFailure, detail: String) -> UpdateStatusDto {
+        let version = {
+            let core = self.lock();
+            if core.status.phase != UpdatePhase::Installing {
+                return core.status.clone();
+            }
+            core.candidate
+                .as_ref()
+                .map(|candidate| candidate.version.clone())
+        };
+        tracing::warn!(?failure, detail = %detail, "update install failed");
+        self.remove_pending().await;
+        if failure == UpdateFailure::Verify
+            && let Some(version) = version
+        {
+            let dir = self.version_dir(&version);
+            match tokio::fs::remove_dir_all(&dir).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    tracing::debug!(error = %error, path = %dir.display(), "cannot remove rejected update package");
+                }
+            }
+        }
+        self.fail(failure, detail);
+        self.status()
+    }
+
+    /// 写 `pending.json`；`work_dir` 给出时重建空的暂存目录。
+    async fn prepare_install(
+        &self,
+        candidate: &Candidate,
+        work_dir: Option<&Path>,
+    ) -> std::io::Result<()> {
         let record = PendingRecord {
             target_version: candidate.version.clone(),
             from_version: self.current_version.clone(),
             asset_name: candidate.asset_name.clone(),
             created_at_ms: now_ms(),
+            channel: self.lock().status.channel.clone(),
         };
         let bytes = serde_json::to_vec_pretty(&record).map_err(std::io::Error::other)?;
         let pending = self.updates_dir.join(PENDING_FILE);
         let temp = self.updates_dir.join(format!("{PENDING_FILE}.tmp"));
         tokio::fs::write(&temp, bytes).await?;
         tokio::fs::rename(&temp, &pending).await?;
+        let Some(work_dir) = work_dir else {
+            return Ok(());
+        };
         match tokio::fs::remove_dir_all(work_dir).await {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -702,15 +901,15 @@ impl UpdateService {
 
     // ------------------------------------------------------------------ 启动对账 / 周期
 
-    /// 上次安装留下 `pending.json`：版本已是目标 → 成功并清理；否则报告未完成。
-    async fn reconcile_pending(&self) {
+    /// 上次安装留下 `pending.json`：版本已是目标 → 成功、清理并返回该版本；否则报告未完成。
+    pub async fn reconcile(&self) -> Option<String> {
         let pending = self.updates_dir.join(PENDING_FILE);
         let bytes = match tokio::fs::read(&pending).await {
             Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
             Err(error) => {
                 tracing::debug!(error = %error, "cannot read pending update record");
-                return;
+                return None;
             }
         };
         let record = match serde_json::from_slice::<PendingRecord>(&bytes) {
@@ -718,7 +917,7 @@ impl UpdateService {
             Err(error) => {
                 tracing::debug!(error = %error, "invalid pending update record dropped");
                 self.remove_pending().await;
-                return;
+                return None;
             }
         };
         let installed = record.target_version.trim_start_matches('v')
@@ -728,7 +927,7 @@ impl UpdateService {
             if let Err(error) = tokio::fs::remove_dir_all(&self.updates_dir).await {
                 tracing::debug!(error = %error, "cannot clean updates dir");
             }
-            return;
+            return Some(record.target_version);
         }
         tracing::warn!(
             target = %record.target_version,
@@ -744,17 +943,23 @@ impl UpdateService {
             core.status.has_update =
                 is_newer(&record.target_version, &self.current_version).unwrap_or(false);
             core.status.latest_version = record.target_version.clone();
+            core.status.channel = record.channel.clone();
             core.status.failure = Some(UpdateFailure::InstallIncomplete);
             core.status.error_detail = format!(
                 "running version {} after installing {}",
                 self.current_version, record.target_version
             );
         });
+        None
     }
 
     fn pref(&self, key: &str) -> Option<serde_json::Value> {
-        self.events
-            .inspect(|snapshot| snapshot.preferences.values.get(key).cloned())
+        match &self.host {
+            Host::Agent { events, .. } => {
+                events.inspect(|snapshot| snapshot.preferences.values.get(key).cloned())
+            }
+            Host::Delegated(_) => None,
+        }
     }
 
     async fn periodic(self: &Arc<Self>, cancel: CancellationToken) {
@@ -793,7 +998,12 @@ impl UpdateService {
     }
 }
 
-fn apply_outcome(core: &mut Core, outcome: CheckOutcome, target: &InstallTarget) {
+fn apply_outcome(
+    core: &mut Core,
+    outcome: CheckOutcome,
+    target: &InstallTarget,
+    release_page_url: String,
+) {
     let status = &mut core.status;
     status.phase = if outcome.has_update {
         UpdatePhase::Available
@@ -818,7 +1028,7 @@ fn apply_outcome(core: &mut Core, outcome: CheckOutcome, target: &InstallTarget)
     status.downloaded_bytes = 0;
     status.install_pending = false;
     status.download_url = outcome.manual_url;
-    status.release_page_url = RELEASE_PAGE_URL.to_owned();
+    status.release_page_url = release_page_url;
     status.notes = outcome.notes;
     status.failure = None;
     status.error_detail.clear();
@@ -895,6 +1105,274 @@ mod tests {
         ))
     }
 
+    fn events(service: &UpdateService) -> &AgentEventHub {
+        match &service.host {
+            Host::Agent { events, .. } => events,
+            Host::Delegated(_) => unreachable!("agent host expected"),
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingDelegate {
+        statuses: Mutex<Vec<UpdateStatusDto>>,
+        installs: Mutex<Vec<(PathBuf, String)>>,
+    }
+
+    impl UpdateDelegate for RecordingDelegate {
+        fn status_changed(&self, status: &UpdateStatusDto) {
+            self.statuses.lock().unwrap().push(status.clone());
+        }
+
+        fn install_package(&self, package: &Path, version: &str) {
+            self.installs
+                .lock()
+                .unwrap()
+                .push((package.to_path_buf(), version.to_owned()));
+        }
+    }
+
+    const APK: &[u8] = b"fake apk bytes";
+
+    /// 官网形状的移动端发布：`mobile.assets` 只有 arm64 分包，`SHA256SUMS-mobile.txt` 带其校验和。
+    async fn mobile_site(version: &'static str) -> String {
+        use sha2::Digest;
+        let apk = format!("FluxDown-{version}-android-arm64-v8a.apk");
+        let sums = format!("{}  {apk}\n", hex::encode(sha2::Sha256::digest(APK)));
+        let release_apk = apk.clone();
+        let app = Router::new()
+            .route(
+                "/api/release",
+                get(move || {
+                    let apk = release_apk.clone();
+                    async move {
+                        axum::Json(serde_json::json!({
+                            "version": "9.9.9",
+                            "assets": {},
+                            "mobile": {
+                                "version": version,
+                                "tag": format!("v{version}"),
+                                "assets": {
+                                    "android_arm64": { "name": apk, "size": APK.len(), "download_url": format!("/api/download/{apk}") },
+                                    "android_universal": null
+                                }
+                            }
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/api/changelog",
+                get(|| async { axum::Json(serde_json::json!({ "releases": [] })) }),
+            )
+            .route(
+                "/api/download/{name}",
+                get(
+                    move |axum::extract::Path(name): axum::extract::Path<String>| {
+                        let (apk, sums) = (apk.clone(), sums.clone());
+                        async move {
+                            if name == "SHA256SUMS-mobile.txt" {
+                                Ok(sums.into_bytes())
+                            } else if name == apk {
+                                Ok(APK.to_vec())
+                            } else {
+                                Err(axum::http::StatusCode::NOT_FOUND)
+                            }
+                        }
+                    },
+                ),
+            );
+        serve(app).await
+    }
+
+    async fn serve(app: Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        base
+    }
+
+    /// 绑定后立即释放的端口：连接被拒绝。
+    async fn dead_base() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    }
+
+    fn delegated(
+        dir: &Path,
+        current: &str,
+        endpoint: Endpoint,
+        abis: &[&str],
+    ) -> (Arc<UpdateService>, Arc<RecordingDelegate>) {
+        let delegate = Arc::new(RecordingDelegate::default());
+        let abis: Vec<String> = abis.iter().map(|abi| (*abi).to_owned()).collect();
+        let service = UpdateService::delegated_with(
+            DelegatedParts {
+                data_dir: dir.to_path_buf(),
+                current_version: current.to_owned(),
+                target: InstallTarget::android(&abis, None),
+                delegate: delegate.clone(),
+                user_agent_product: "fluxdown-test",
+            },
+            endpoint,
+        );
+        (Arc::new(service), delegate)
+    }
+
+    async fn wait_phase(service: &UpdateService, phase: UpdatePhase) -> UpdateStatusDto {
+        for _ in 0..200 {
+            let status = service.status();
+            if status.phase == phase {
+                return status;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("phase {phase:?} not reached: {:?}", service.status());
+    }
+
+    #[test]
+    fn android_target_prefers_first_published_abi_then_universal() {
+        let abis = |list: &[&str]| list.iter().map(|abi| (*abi).to_owned()).collect::<Vec<_>>();
+        let arm = InstallTarget::android(&abis(&["arm64-v8a", "armeabi-v7a", "armeabi"]), None);
+        assert_eq!(arm.asset_keys, ["android_arm64", "android_universal"]);
+        assert_eq!(arm.component, ReleaseComponent::Mobile);
+        assert_eq!(arm.kind, UpdateInstallKind::AndroidApk);
+        // 32 位 x86 没有分包：跳到下一个可运行的 ABI。
+        let x86 = InstallTarget::android(&abis(&["x86", "armeabi-v7a"]), None);
+        assert_eq!(x86.asset_keys, ["android_armv7", "android_universal"]);
+        let unknown = InstallTarget::android(&abis(&["mips"]), None);
+        assert_eq!(unknown.asset_keys, ["android_universal"]);
+    }
+
+    #[tokio::test]
+    async fn delegated_flow_downloads_verifies_and_hands_package_to_host() {
+        let dir = temp_dir();
+        let base = mobile_site("2.0.0").await;
+        let (service, delegate) = delegated(
+            &dir,
+            "1.0.0",
+            Endpoint::with_base(&base, true),
+            &["arm64-v8a"],
+        );
+        let status = service.check("stable").await.unwrap();
+        assert_eq!(status.phase, UpdatePhase::Available);
+        assert_eq!(status.install_kind, UpdateInstallKind::AndroidApk);
+        assert_eq!(status.manual_reason, None);
+        assert_eq!(status.asset_name, "FluxDown-2.0.0-android-arm64-v8a.apk");
+        assert_eq!(status.release_page_url, format!("{base}/changelog"));
+
+        service.install().await.unwrap();
+        wait_phase(&service, UpdatePhase::Installing).await;
+        let installs = delegate.installs.lock().unwrap().clone();
+        assert_eq!(installs.len(), 1);
+        let (package, version) = &installs[0];
+        assert_eq!(version, "2.0.0");
+        assert_eq!(std::fs::read(package).unwrap(), APK);
+        assert!(dir.join("updates").join(PENDING_FILE).exists());
+        assert!(
+            delegate
+                .statuses
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|status| status.phase == UpdatePhase::Downloading)
+        );
+
+        // 用户在系统确认框取消：回到失败态，包保留，重试直接复用（不重新下载）。
+        let status = service
+            .install_failed(UpdateFailure::ElevationCancelled, "aborted".to_owned())
+            .await;
+        assert_eq!(status.phase, UpdatePhase::Failed);
+        assert_eq!(status.failure, Some(UpdateFailure::ElevationCancelled));
+        assert!(!dir.join("updates").join(PENDING_FILE).exists());
+        assert!(package.exists());
+        service.install().await.unwrap();
+        wait_phase(&service, UpdatePhase::Installing).await;
+        assert_eq!(delegate.installs.lock().unwrap().len(), 2);
+
+        // 签名 / 包名不符：丢弃该版本的包。
+        service
+            .install_failed(UpdateFailure::Verify, "signature mismatch".to_owned())
+            .await;
+        assert!(!package.exists());
+        // 非安装中的回报被忽略。
+        let status = service
+            .install_failed(UpdateFailure::Install, "late".to_owned())
+            .await;
+        assert_eq!(status.failure, Some(UpdateFailure::Verify));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn delegated_dev_version_is_manual_only() {
+        let dir = temp_dir();
+        let base = mobile_site("2.0.0").await;
+        let (service, _delegate) = delegated(
+            &dir,
+            "dev",
+            Endpoint::with_base(&base, true),
+            &["arm64-v8a"],
+        );
+        assert_eq!(
+            service.status().manual_reason,
+            Some(UpdateManualReason::UnofficialBuild)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unreachable_primary_site_falls_back_and_sticks() {
+        let dir = temp_dir();
+        let dead = dead_base().await;
+        let base = mobile_site("2.0.0").await;
+        let endpoint = Endpoint::with_bases(&[&dead, &base], true, Duration::from_secs(30));
+        let (service, _delegate) = delegated(&dir, "1.0.0", endpoint.clone(), &["arm64-v8a"]);
+        let started = Instant::now();
+        let status = service.check("stable").await.unwrap();
+        // 连接被拒绝立即换站，不必等错峰间隔。
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(status.phase, UpdatePhase::Available);
+        assert_eq!(status.release_page_url, format!("{base}/changelog"));
+        assert_eq!(endpoint.attempt_order(), [1, 0]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_primary_site_loses_the_staggered_race() {
+        let dir = temp_dir();
+        let stalled = Router::new().route(
+            "/api/release",
+            get(|| async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                axum::Json(serde_json::json!({}))
+            }),
+        );
+        let stalled = serve(stalled).await;
+        let base = mobile_site("2.0.0").await;
+        let endpoint = Endpoint::with_bases(&[&stalled, &base], true, Duration::from_millis(50));
+        let (service, _delegate) = delegated(&dir, "1.0.0", endpoint, &["arm64-v8a"]);
+        let started = Instant::now();
+        let status = service.check("stable").await.unwrap();
+        assert!(started.elapsed() < REQUEST_TIMEOUT);
+        assert_eq!(status.latest_version, "2.0.0");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn all_sites_failing_reports_network_failure() {
+        let dir = temp_dir();
+        let (first, second) = (dead_base().await, dead_base().await);
+        let endpoint = Endpoint::with_bases(&[&first, &second], true, Duration::from_millis(50));
+        let (service, _delegate) = delegated(&dir, "1.0.0", endpoint, &["arm64-v8a"]);
+        assert!(matches!(
+            service.check("stable").await,
+            Err(UpdateError::Http(_))
+        ));
+        assert_eq!(service.status().failure, Some(UpdateFailure::Network));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     async fn site(version: &'static str) -> String {
         let app = Router::new()
             .route(
@@ -934,6 +1412,7 @@ mod tests {
             from_version: "1.0.0".to_owned(),
             asset_name: "a".to_owned(),
             created_at_ms: 1,
+            channel: "frontier".to_owned(),
         };
         std::fs::write(
             updates.join(PENDING_FILE),
@@ -947,7 +1426,7 @@ mod tests {
         let dir = temp_dir();
         write_pending(&dir, "2.0.0");
         let service = service(&dir, "2.0.0", "http://127.0.0.1:9", None);
-        service.reconcile_pending().await;
+        assert_eq!(service.reconcile().await.as_deref(), Some("2.0.0"));
         assert!(!dir.join("updates").exists());
         assert_eq!(service.status().phase, UpdatePhase::Idle);
         std::fs::remove_dir_all(dir).unwrap();
@@ -958,11 +1437,13 @@ mod tests {
         let dir = temp_dir();
         write_pending(&dir, "2.0.0");
         let service = service(&dir, "1.0.0", "http://127.0.0.1:9", None);
-        service.reconcile_pending().await;
+        assert_eq!(service.reconcile().await, None);
         let status = service.status();
         assert_eq!(status.phase, UpdatePhase::Failed);
         assert_eq!(status.failure, Some(UpdateFailure::InstallIncomplete));
         assert_eq!(status.latest_version, "2.0.0");
+        // 重试按发起安装时的渠道重新检查。
+        assert_eq!(status.channel, "frontier");
         assert!(status.has_update);
         assert!(!dir.join("updates").join(PENDING_FILE).exists());
         std::fs::remove_dir_all(dir).unwrap();
@@ -985,10 +1466,10 @@ mod tests {
             service.install().await,
             Err(UpdateError::NoUpdate)
         ));
-        let sequence = service.events.snapshot().sequence;
+        let sequence = events(&service).snapshot().sequence;
         service.check("stable").await.unwrap();
         // Checking → UpToDate 两次迁移都有变化；状态相同的重复提交不会额外发布。
-        assert_eq!(service.events.snapshot().sequence, sequence + 2);
+        assert_eq!(events(&service).snapshot().sequence, sequence + 2);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

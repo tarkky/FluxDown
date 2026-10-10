@@ -3,9 +3,15 @@
 //! 渠道对应 SemVer 预发布后缀：稳定版 `vX.Y.Z`，frontier 为 `vX.Y.Z-rc.N`。
 //! 比较遵循 SemVer 2.0 §11：`1.3.0 > 1.3.0-rc.2`，`1.4.0-rc.1 > 1.3.0`，
 //! 预发布标识按点分段比较（数字段小于字母段），构建元数据（`+meta`）忽略。
+//!
+//! 官方站点在域名迁移期有多个（[`DEFAULT_API_BASES`]），任一可达即可：检查时错峰竞速，
+//! 胜出站点用于同一轮的更新说明、校验和与更新包下载。
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::time::Duration;
 
 use fluxdown_protocol::{ReleaseNoteDto, UpdateManualReason};
 use serde::Deserialize;
@@ -14,8 +20,12 @@ use serde_json::Value;
 use super::install::{InstallTarget, ReleaseComponent};
 use crate::http_client::HttpClientError;
 
-const DEFAULT_API_BASE: &str = "https://fluxdown.zerx.dev";
+/// 官方站点，按优先级：现行域名在前，迁移后的新域名在后；两者长期并存，任一失效时自动换用另一个。
+const DEFAULT_API_BASES: [&str; 2] = ["https://fluxdown.zerx.dev", "https://fluxdown.com"];
+/// 未检查前（初始状态）展示的发布页。检查后改用胜出站点的 `/changelog`。
 pub(super) const RELEASE_PAGE_URL: &str = "https://fluxdown.zerx.dev/changelog";
+/// 首选站点在此时长内无结果，才并行请求下一个站点（避免每次都双发请求）。
+const FALLBACK_STAGGER: Duration = Duration::from_secs(3);
 const CHANGELOG_PER_PAGE: u32 = 50;
 
 /// 更新服务错误。
@@ -42,7 +52,11 @@ pub enum UpdateError {
 /// 官方站点端点；调试构建可经 `FLUXDOWN_UPDATE_BASE_URL` 指向本地服务并跳过主机白名单。
 #[derive(Clone, Debug)]
 pub(super) struct Endpoint {
-    base: String,
+    /// 非空，按优先级。
+    bases: Arc<[String]>,
+    /// 最近一次成功返回 `/api/release` 的站点下标：后续请求与下次检查优先用它。
+    active: Arc<AtomicUsize>,
+    stagger: Duration,
     trust_any: bool,
 }
 
@@ -55,30 +69,74 @@ impl Endpoint {
                 return Self::with_base(base, true);
             }
         }
-        Self::with_base(DEFAULT_API_BASE, false)
+        Self::with_bases(&DEFAULT_API_BASES, false, FALLBACK_STAGGER)
     }
 
     pub(super) fn with_base(base: &str, trust_any: bool) -> Self {
+        Self::with_bases(&[base], trust_any, FALLBACK_STAGGER)
+    }
+
+    pub(super) fn with_bases(bases: &[&str], trust_any: bool, stagger: Duration) -> Self {
+        let bases: Arc<[String]> = bases
+            .iter()
+            .map(|base| base.trim_end_matches('/').to_owned())
+            .collect();
         Self {
-            base: base.trim_end_matches('/').to_owned(),
+            bases,
+            active: Arc::new(AtomicUsize::new(0)),
+            stagger,
             trust_any,
         }
     }
 
-    pub(super) fn release_url(&self, channel: &str) -> String {
-        format!("{}/api/release?channel={channel}", self.base)
+    fn base(&self) -> &str {
+        let index = self.active.load(AtomicOrdering::Relaxed);
+        self.bases
+            .get(index)
+            .or_else(|| self.bases.first())
+            .map_or("", String::as_str)
+    }
+
+    /// 本次检查尝试站点的顺序：上次成功的站点在前，其余按优先级。
+    pub(super) fn attempt_order(&self) -> Vec<usize> {
+        let active = self
+            .active
+            .load(AtomicOrdering::Relaxed)
+            .min(self.bases.len().saturating_sub(1));
+        std::iter::once(active)
+            .chain((0..self.bases.len()).filter(|&index| index != active))
+            .collect()
+    }
+
+    pub(super) fn set_active(&self, index: usize) {
+        if index < self.bases.len() {
+            self.active.store(index, AtomicOrdering::Relaxed);
+        }
+    }
+
+    pub(super) fn stagger(&self) -> Duration {
+        self.stagger
+    }
+
+    pub(super) fn release_url_at(&self, index: usize, channel: &str) -> Option<String> {
+        let base = self.bases.get(index)?;
+        Some(format!("{base}/api/release?channel={channel}"))
+    }
+
+    pub(super) fn release_page_url(&self) -> String {
+        format!("{}/changelog", self.base())
     }
 
     pub(super) fn changelog_url(&self, channel: &str, current_version: &str) -> String {
         format!(
             "{}/api/changelog?per_page={CHANGELOG_PER_PAGE}&since=v{current_version}&channel={channel}",
-            self.base
+            self.base()
         )
     }
 
     /// `{base}/api/download/{name}?tag={tag}`；名称与 tag 均做百分号编码。
     pub(super) fn package_url(&self, name: &str, tag: &str) -> Result<String, UpdateError> {
-        let mut url = reqwest::Url::parse(&self.base)
+        let mut url = reqwest::Url::parse(self.base())
             .map_err(|error| UpdateError::Decode(format!("invalid API base: {error}")))?;
         url.path_segments_mut()
             .map_err(|()| UpdateError::Decode("API base cannot be a base URL".to_owned()))?
@@ -91,7 +149,7 @@ impl Endpoint {
     /// 站点资产 URL 可能是相对路径（`/api/download/...`，用于地域路由）。
     fn absolute(&self, url: &str) -> String {
         if url.starts_with('/') {
-            format!("{}{url}", self.base)
+            format!("{}{url}", self.base())
         } else {
             url.to_owned()
         }
@@ -112,7 +170,7 @@ pub(super) struct SelectedAsset {
     pub download_url: String,
 }
 
-/// 目标组件（桌面 / 服务端）在渠道上的最新发布。
+/// 目标组件（桌面 / 服务端 / 移动端）在渠道上的最新发布。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ComponentRelease {
     pub version: String,
@@ -137,10 +195,12 @@ pub(super) struct RawRelease {
     desktop: RawComponent,
     #[serde(default)]
     server: Option<RawComponent>,
+    #[serde(default)]
+    mobile: Option<RawComponent>,
 }
 
 impl RawRelease {
-    /// 取目标组件的发布；服务端发布缺失（`server: null`）时返回 `None`。
+    /// 取目标组件的发布；服务端 / 移动端发布缺失（`null`）时返回 `None`。
     pub(super) fn component(
         self,
         target: &InstallTarget,
@@ -149,6 +209,7 @@ impl RawRelease {
         let component = match target.component {
             ReleaseComponent::Desktop => self.desktop,
             ReleaseComponent::Server => self.server?,
+            ReleaseComponent::Mobile => self.mobile?,
         };
         if component.version.is_empty() {
             return None;
@@ -199,6 +260,7 @@ pub(super) fn checksum_file_names(component: ReleaseComponent) -> [&'static str;
     match component {
         ReleaseComponent::Desktop => ["SHA256SUMS-app.txt", "SHA256SUMS.txt"],
         ReleaseComponent::Server => ["SHA256SUMS-server.txt", "SHA256SUMS.txt"],
+        ReleaseComponent::Mobile => ["SHA256SUMS-mobile.txt", "SHA256SUMS.txt"],
     }
 }
 
@@ -272,7 +334,10 @@ fn is_trusted_download_url(url: &str) -> bool {
                 .strip_suffix(domain)
                 .is_some_and(|prefix| prefix.ends_with('.'))
     };
-    under("zerx.dev") || under("github.com") || under("githubusercontent.com")
+    under("zerx.dev")
+        || under("fluxdown.com")
+        || under("github.com")
+        || under("githubusercontent.com")
 }
 
 /// 预发布标识：数字段按数值比较且恒小于字母段（SemVer 2.0 §11.4）。
@@ -403,7 +468,7 @@ mod tests {
 
     #[test]
     fn desktop_component_uses_top_level_assets_in_key_priority() {
-        let endpoint = Endpoint::with_base(DEFAULT_API_BASE, false);
+        let endpoint = Endpoint::with_base(DEFAULT_API_BASES[0], false);
         let release = release_json()
             .component(
                 &target(
@@ -437,7 +502,7 @@ mod tests {
 
     #[test]
     fn server_component_reads_server_block() {
-        let endpoint = Endpoint::with_base(DEFAULT_API_BASE, false);
+        let endpoint = Endpoint::with_base(DEFAULT_API_BASES[0], false);
         let release = release_json()
             .component(
                 &target(ReleaseComponent::Server, &["linux_arm64", "linux_x64"]),
@@ -454,7 +519,7 @@ mod tests {
 
     #[test]
     fn missing_asset_or_server_block() {
-        let endpoint = Endpoint::with_base(DEFAULT_API_BASE, false);
+        let endpoint = Endpoint::with_base(DEFAULT_API_BASES[0], false);
         let none = release_json()
             .component(&target(ReleaseComponent::Desktop, &[]), &endpoint)
             .unwrap();
@@ -506,6 +571,85 @@ mod tests {
             checksum_file_names(ReleaseComponent::Server),
             ["SHA256SUMS-server.txt", "SHA256SUMS.txt"]
         );
+        assert_eq!(
+            checksum_file_names(ReleaseComponent::Mobile),
+            ["SHA256SUMS-mobile.txt", "SHA256SUMS.txt"]
+        );
+    }
+
+    #[test]
+    fn mobile_component_reads_mobile_block_and_falls_back_to_universal() {
+        let endpoint = Endpoint::with_base(DEFAULT_API_BASES[0], false);
+        let raw = || -> RawRelease {
+            serde_json::from_value(json!({
+                "version": "1.4.0",
+                "assets": {},
+                "mobile": {
+                    "version": "1.4.0-rc.2",
+                    "tag": "v1.4.0-rc.2",
+                    "assets": {
+                        "android_arm64": null,
+                        "android_universal": { "name": "FluxDown-1.4.0-rc.2-android-universal.apk", "size": 90, "download_url": "/api/download/u.apk?tag=v1.4.0-rc.2" }
+                    }
+                }
+            }))
+            .unwrap()
+        };
+        let release = raw()
+            .component(
+                &target(
+                    ReleaseComponent::Mobile,
+                    &["android_arm64", "android_universal"],
+                ),
+                &endpoint,
+            )
+            .unwrap();
+        assert_eq!(release.version, "1.4.0-rc.2");
+        assert_eq!(release.tag, "v1.4.0-rc.2");
+        let asset = release.asset.unwrap();
+        assert_eq!(asset.name, "FluxDown-1.4.0-rc.2-android-universal.apk");
+        assert_eq!(
+            asset.download_url,
+            "https://fluxdown.zerx.dev/api/download/u.apk?tag=v1.4.0-rc.2"
+        );
+        let without_mobile: RawRelease =
+            serde_json::from_value(json!({ "version": "1.4.0", "mobile": null })).unwrap();
+        assert!(
+            without_mobile
+                .component(
+                    &target(ReleaseComponent::Mobile, &["android_universal"]),
+                    &endpoint
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn active_site_drives_urls_and_attempt_order() {
+        let endpoint = Endpoint::with_bases(&DEFAULT_API_BASES, false, Duration::from_secs(3));
+        assert_eq!(endpoint.attempt_order(), [0, 1]);
+        assert_eq!(
+            endpoint.release_url_at(1, "stable").as_deref(),
+            Some("https://fluxdown.com/api/release?channel=stable")
+        );
+        assert_eq!(endpoint.release_url_at(2, "stable"), None);
+        endpoint.set_active(1);
+        assert_eq!(endpoint.attempt_order(), [1, 0]);
+        assert_eq!(
+            endpoint.release_page_url(),
+            "https://fluxdown.com/changelog"
+        );
+        assert_eq!(
+            endpoint.package_url("a.apk", "v1.0.0").unwrap(),
+            "https://fluxdown.com/api/download/a.apk?tag=v1.0.0"
+        );
+        assert_eq!(
+            endpoint.absolute("/api/download/a.apk"),
+            "https://fluxdown.com/api/download/a.apk"
+        );
+        // 越界下标不改变当前站点。
+        endpoint.set_active(5);
+        assert_eq!(endpoint.attempt_order(), [1, 0]);
     }
 
     #[test]
@@ -527,7 +671,11 @@ mod tests {
     fn untrusted_download_urls_are_rejected() {
         use super::is_trusted_download_url as trusted;
         assert!(trusted("https://fluxdown.zerx.dev/api/download/x"));
+        assert!(trusted("https://fluxdown.com/api/download/x"));
+        assert!(trusted("https://dl.fluxdown.com/FluxDownRelease/a.apk"));
         assert!(trusted("https://objects.githubusercontent.com/a"));
+        assert!(!trusted("https://evilfluxdown.com/a"));
+        assert!(!trusted("https://fluxdown.com.evil.com/a"));
         assert!(!trusted("http://fluxdown.zerx.dev/a"));
         assert!(!trusted("file:///etc/passwd"));
         assert!(!trusted("https://evilzerx.dev/a"));
