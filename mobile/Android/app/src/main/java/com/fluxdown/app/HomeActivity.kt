@@ -18,6 +18,7 @@ import androidx.lifecycle.lifecycleScope
 import com.fluxdown.app.data.ThemeMode
 import com.fluxdown.app.nav.AppNavigator
 import com.fluxdown.app.service.NotificationIntents
+import com.fluxdown.app.update.UpdateNotifier
 import com.fluxdown.app.shell.AppShell
 import com.fluxdown.app.shell.FluxAppRoot
 import com.fluxdown.fluxui.material.FluxLaunchReveal
@@ -92,6 +93,7 @@ class HomeActivity : ComponentActivity() {
 
     /** 点按系统通知 → 切到通知所属主机并打开任务详情；其余（桌面图标启动）无需处理。 */
     private fun handleIntent(intent: Intent?) {
+        if (UpdateNotifier.handle(navigator, intent)) return
         NotificationIntents.handle((application as FluxApplication).container, navigator, intent)
     }
 }

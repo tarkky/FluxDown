@@ -3,6 +3,8 @@ package com.fluxdown.bridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.fluxdown.core.host.HostSession as HostPort
+import com.fluxdown.core.update.AppUpdateConfig
+import com.fluxdown.core.update.AppUpdatePort
 
 /**
  * 进程内唯一的 Rust 入口：持有唯一一个 [FluxCore]（一个 tokio 运行时 + 至多一个本机 daemon/agent）。
@@ -32,6 +34,11 @@ object FluxBridge {
     /** 连接远端 `fluxdown-agent --server`（完成连接 + 鉴权 + 握手 + 首个快照才返回）；[endpoint] 接受 `http(s)://` / `ws(s)://`。 */
     suspend fun openRemote(endpoint: String, accessKey: String): HostPort = withContext(Dispatchers.IO) {
         guarded { RustHostSession(core.openRemote(endpoint, accessKey)) }
+    }
+
+    /** 应用自更新器（进程内唯一，首次 [config] 生效）；与本机 / 远端主机无关。 */
+    suspend fun appUpdater(config: AppUpdateConfig): AppUpdatePort = withContext(Dispatchers.IO) {
+        guarded { RustAppUpdater(core.appUpdater(config.toDto())) }
     }
 
     /** 停止进程内本机引擎（进程即将退出 / 用户关闭本机引擎时）。 */

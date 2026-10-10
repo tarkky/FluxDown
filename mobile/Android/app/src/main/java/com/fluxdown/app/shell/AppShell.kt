@@ -71,6 +71,7 @@ import com.fluxdown.app.feature.settings.LocalSettingsFocus
 import com.fluxdown.app.feature.settings.SettingsFocus
 import com.fluxdown.app.feature.settings.AppearanceSyncEffect
 import com.fluxdown.app.feature.settings.account.AccountEffects
+import com.fluxdown.app.update.UpdateEffects
 import com.fluxdown.app.feature.settings.general.GeneralSettingsEffects
 import com.fluxdown.app.feature.settings.SettingsPageScreen
 import com.fluxdown.app.feature.settings.SettingsScreen
@@ -153,6 +154,8 @@ fun AppShell() {
     // 回到前台：文件跟踪重扫（10s 节流，对齐 RescanThrottle；空闲静默期间不轮询）
     LifecycleEventEffect(Lifecycle.Event.ON_START) {
         container.rescanOnForeground()
+        // 应用更新：重试挂起的安装、6h 节流检查、条件允许时自动下载（永不自动安装）
+        container.updates.onForeground()
         // 仍在等待的 fileExists 询问：回到前台重新弹出（含点通知进入）
         nav.reopenFileConflicts()
     }
@@ -173,6 +176,7 @@ fun AppShell() {
         GeneralSettingsEffects()
         AppearanceSyncEffect()
         AccountEffects()
+        UpdateEffects()
         ProvideDownloadsView {
             BackHandler(enabled = nav.searchOpen || nav.sheet != null || nav.selecting || nav.stack.isNotEmpty() || nav.tab != AppTab.Downloads) {
                 nav.back()

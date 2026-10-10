@@ -26,6 +26,13 @@ import com.fluxdown.core.model.TaskGroup
 import com.fluxdown.core.model.TaskRuntime
 import com.fluxdown.core.model.TaskStatus
 import com.fluxdown.core.model.VariantOption
+import com.fluxdown.core.update.AppUpdateConfig as CoreUpdateConfig
+import com.fluxdown.core.update.AppUpdateSignal
+import com.fluxdown.core.update.AppUpdateStatus
+import com.fluxdown.core.update.ReleaseNote
+import com.fluxdown.core.update.UpdateFailure
+import com.fluxdown.core.update.UpdateManualReason
+import com.fluxdown.core.update.UpdatePhase
 import kotlinx.coroutines.CancellationException
 
 /*
@@ -305,3 +312,89 @@ internal fun CategoryDto.toCore() = Category(
     visible = visible,
     builtinType = builtinType,
 )
+
+// ───────────────────────────── 应用自更新 ─────────────────────────────
+
+internal fun CoreUpdateConfig.toDto() = AppUpdateConfig(
+    dataDir = dataDir,
+    currentVersion = currentVersion,
+    supportedAbis = supportedAbis,
+    manualReason = manualReason?.toDto(),
+)
+
+internal fun UpdateManualReason.toDto(): UpdateManualReasonDto = when (this) {
+    UpdateManualReason.ManagedPackage -> UpdateManualReasonDto.MANAGED_PACKAGE
+    UpdateManualReason.NotWritable -> UpdateManualReasonDto.NOT_WRITABLE
+    UpdateManualReason.NoAsset -> UpdateManualReasonDto.NO_ASSET
+    UpdateManualReason.ElevationUnavailable -> UpdateManualReasonDto.ELEVATION_UNAVAILABLE
+    UpdateManualReason.ReadOnlyLocation -> UpdateManualReasonDto.READ_ONLY_LOCATION
+    UpdateManualReason.UnofficialBuild -> UpdateManualReasonDto.UNOFFICIAL_BUILD
+    UpdateManualReason.Unsupported -> UpdateManualReasonDto.UNSUPPORTED
+    UpdateManualReason.Unknown -> UpdateManualReasonDto.UNKNOWN
+}
+
+internal fun UpdateManualReasonDto.toCore(): UpdateManualReason = when (this) {
+    UpdateManualReasonDto.MANAGED_PACKAGE -> UpdateManualReason.ManagedPackage
+    UpdateManualReasonDto.NOT_WRITABLE -> UpdateManualReason.NotWritable
+    UpdateManualReasonDto.NO_ASSET -> UpdateManualReason.NoAsset
+    UpdateManualReasonDto.ELEVATION_UNAVAILABLE -> UpdateManualReason.ElevationUnavailable
+    UpdateManualReasonDto.READ_ONLY_LOCATION -> UpdateManualReason.ReadOnlyLocation
+    UpdateManualReasonDto.UNOFFICIAL_BUILD -> UpdateManualReason.UnofficialBuild
+    UpdateManualReasonDto.UNSUPPORTED -> UpdateManualReason.Unsupported
+    UpdateManualReasonDto.UNKNOWN -> UpdateManualReason.Unknown
+}
+
+internal fun UpdateFailure.toDto(): UpdateFailureDto = when (this) {
+    UpdateFailure.Network -> UpdateFailureDto.NETWORK
+    UpdateFailure.Verify -> UpdateFailureDto.VERIFY
+    UpdateFailure.Storage -> UpdateFailureDto.STORAGE
+    UpdateFailure.Install -> UpdateFailureDto.INSTALL
+    UpdateFailure.ElevationCancelled -> UpdateFailureDto.ELEVATION_CANCELLED
+    UpdateFailure.InstallIncomplete -> UpdateFailureDto.INSTALL_INCOMPLETE
+    UpdateFailure.Unknown -> UpdateFailureDto.UNKNOWN
+}
+
+internal fun UpdateFailureDto.toCore(): UpdateFailure = when (this) {
+    UpdateFailureDto.NETWORK -> UpdateFailure.Network
+    UpdateFailureDto.VERIFY -> UpdateFailure.Verify
+    UpdateFailureDto.STORAGE -> UpdateFailure.Storage
+    UpdateFailureDto.INSTALL -> UpdateFailure.Install
+    UpdateFailureDto.ELEVATION_CANCELLED -> UpdateFailure.ElevationCancelled
+    UpdateFailureDto.INSTALL_INCOMPLETE -> UpdateFailure.InstallIncomplete
+    UpdateFailureDto.UNKNOWN -> UpdateFailure.Unknown
+}
+
+internal fun UpdatePhaseDto.toCore(): UpdatePhase = when (this) {
+    UpdatePhaseDto.IDLE -> UpdatePhase.Idle
+    UpdatePhaseDto.CHECKING -> UpdatePhase.Checking
+    UpdatePhaseDto.UP_TO_DATE -> UpdatePhase.UpToDate
+    UpdatePhaseDto.AVAILABLE -> UpdatePhase.Available
+    UpdatePhaseDto.DOWNLOADING -> UpdatePhase.Downloading
+    UpdatePhaseDto.READY -> UpdatePhase.Ready
+    UpdatePhaseDto.INSTALLING -> UpdatePhase.Installing
+    UpdatePhaseDto.FAILED -> UpdatePhase.Failed
+}
+
+internal fun AppUpdateStatusDto.toCore() = AppUpdateStatus(
+    phase = phase.toCore(),
+    currentVersion = currentVersion,
+    channel = channel,
+    latestVersion = latestVersion,
+    hasUpdate = hasUpdate,
+    manualReason = manualReason?.toCore(),
+    assetName = assetName,
+    assetSize = assetSize.toLong(),
+    downloadedBytes = downloadedBytes.toLong(),
+    installPending = installPending,
+    downloadUrl = downloadUrl,
+    releasePageUrl = releasePageUrl,
+    notes = notes.map { ReleaseNote(it.version, it.publishedAt, it.body) },
+    failure = failure?.toCore(),
+    errorDetail = errorDetail,
+    checkedAtMs = checkedAtMs.toLong(),
+)
+
+internal fun AppUpdateSignalDto.toCore(): AppUpdateSignal = when (this) {
+    is AppUpdateSignalDto.Status -> AppUpdateSignal.Status(status.toCore())
+    is AppUpdateSignalDto.InstallRequested -> AppUpdateSignal.InstallRequested(packagePath, version)
+}

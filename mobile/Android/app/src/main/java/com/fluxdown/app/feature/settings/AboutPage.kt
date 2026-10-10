@@ -92,8 +92,10 @@ internal fun Context.appVersionName(): String {
 }
 
 /**
- * S14 · 关于：品牌头、版本信息（应用 / 协议 / 远端服务版本）、日志工具、支持 / 网站 / 更新日志 / 隐私 / 开源许可。
- * 同 iOS `AboutPage`；Android 没有 App Store 审核限制，保留捐赠入口。应用内更新器不提供（更新走应用商店 / 发布页）。
+ * S14 · 关于：品牌头、版本信息（应用 / 协议 / 远端服务版本）、软件更新、日志工具、支持 / 网站 / 更新日志 / 隐私 / 开源许可。
+ * 同 iOS `AboutPage`；Android 没有 App Store 审核限制，保留捐赠入口。
+ * 软件更新（[UpdateSection]）是应用内自更新：Rust 更新器检查 / 下载 / 校验，经系统 `PackageInstaller` 安装（必须用户点按确认）；
+ * 商店安装 / 非官方构建只给手动说明与官网入口。更新的是本机 App，与当前主机（含远端）无关。
  */
 @Composable
 internal fun AboutPage() {
@@ -109,6 +111,7 @@ internal fun AboutPage() {
     val logModel = rememberLogExportModel()
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var showLicenses by remember { mutableStateOf(false) }
+    var picker by remember { mutableStateOf<PickerSpec?>(null) }
     val noBrowser = str(R.string.mobileNoBrowser)
     val c = FluxTheme.colors
     val remote = !ctx.isLocalHost
@@ -140,8 +143,9 @@ internal fun AboutPage() {
                     }
                 }
             }
-            flowItem(2, gate, LOGS_ITEM_KEY) { LogsSection(ctx, logModel, scope) }
-            flowItem(3, gate, "support") {
+            flowItem(2, gate, "update") { UpdateSection(ctx) { picker = it } }
+            flowItem(3, gate, LOGS_ITEM_KEY) { LogsSection(ctx, logModel, scope) }
+            flowItem(4, gate, "support") {
                 GlassSection(title = str(R.string.donateTitle), footer = str(R.string.donateThanks)) {
                     row(hasIcon = true) {
                         FluxListRow(
@@ -154,7 +158,7 @@ internal fun AboutPage() {
                     }
                 }
             }
-            flowItem(4, gate, "links") {
+            flowItem(5, gate, "links") {
                 GlassSection {
                     row(hasIcon = true) {
                         SettingRowBox(ctx, "about.website", null) {
@@ -211,7 +215,7 @@ internal fun AboutPage() {
                     }
                 }
             }
-            flowItem(5, gate, "footer") {
+            flowItem(6, gate, "footer") {
                 FluxText(
                     text = str(R.string.mobileFooter),
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
@@ -221,6 +225,7 @@ internal fun AboutPage() {
             }
         }
         LicensesSheet(visible = showLicenses, onDismiss = { showLicenses = false })
+        PickerSheetHost(picker = picker, onDismiss = { picker = null })
     }
 }
 

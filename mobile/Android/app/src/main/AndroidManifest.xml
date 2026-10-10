@@ -183,6 +183,15 @@
             android:name=".service.DownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- 应用更新：安装会话结果（系统回调，不对外导出）+ 周期后台检查任务 -->
+        <receiver
+            android:name=".update.InstallResultReceiver"
+            android:exported="false" />
+        <service
+            android:name=".update.UpdateCheckJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
     </application>
 
 </manifest>

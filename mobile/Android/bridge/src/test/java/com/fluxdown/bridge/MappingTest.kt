@@ -8,6 +8,10 @@ import com.fluxdown.core.model.SeedingStatus
 import com.fluxdown.core.model.SelectionKind
 import com.fluxdown.core.model.SelectionOutcome
 import com.fluxdown.core.model.TaskStatus
+import com.fluxdown.core.update.AppUpdateSignal
+import com.fluxdown.core.update.UpdateFailure
+import com.fluxdown.core.update.UpdateManualReason
+import com.fluxdown.core.update.UpdatePhase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -127,6 +131,49 @@ class MappingTest {
             ),
             dto.toCore(),
         )
+    }
+
+    @Test
+    fun updateStatusMapsSizesAndOptionals() {
+        val dto = AppUpdateStatusDto(
+            phase = UpdatePhaseDto.UP_TO_DATE, currentVersion = "1.0.0", channel = "stable", latestVersion = "1.0.0",
+            hasUpdate = false, manualReason = null, assetName = "", assetSize = 5_000_000_000uL, downloadedBytes = 7uL,
+            installPending = false, downloadUrl = "", releasePageUrl = "", notes = emptyList(), failure = null,
+            errorDetail = "", checkedAtMs = 1_700_000_000_000uL,
+        )
+        val core = dto.toCore()
+        assertEquals(UpdatePhase.UpToDate, core.phase)
+        assertEquals(5_000_000_000L, core.assetSize)
+        assertEquals(7L, core.downloadedBytes)
+        assertEquals(1_700_000_000_000L, core.checkedAtMs)
+        assertNull(core.manualReason)
+        assertNull(core.failure)
+    }
+
+    @Test
+    fun updateStatusMapsReasonFailureAndNotes() {
+        val dto = AppUpdateStatusDto(
+            phase = UpdatePhaseDto.FAILED, currentVersion = "1.0.0", channel = "frontier", latestVersion = "1.1.0",
+            hasUpdate = true, manualReason = UpdateManualReasonDto.MANAGED_PACKAGE, assetName = "a.apk", assetSize = 10uL,
+            downloadedBytes = 10uL, installPending = true, downloadUrl = "https://d", releasePageUrl = "https://r",
+            notes = listOf(AppReleaseNoteDto(version = "1.1.0", publishedAt = "2026-01-01", body = "fix")),
+            failure = UpdateFailureDto.ELEVATION_CANCELLED, errorDetail = "x", checkedAtMs = 1uL,
+        )
+        val core = dto.toCore()
+        assertEquals(UpdateManualReason.ManagedPackage, core.manualReason)
+        assertEquals(UpdateFailure.ElevationCancelled, core.failure)
+        assertEquals(1, core.notes.size)
+        assertEquals("fix", core.notes[0].body)
+        assertTrue(core.installPending)
+    }
+
+    @Test
+    fun updateSignalsAndEnumsRoundTrip() {
+        val install = AppUpdateSignalDto.InstallRequested("/p/a.apk", "1.1.0").toCore()
+        assertEquals(AppUpdateSignal.InstallRequested("/p/a.apk", "1.1.0"), install)
+        for (failure in UpdateFailure.entries) assertEquals(failure, failure.toDto().toCore())
+        for (reason in UpdateManualReason.entries) assertEquals(reason, reason.toDto().toCore())
+        assertEquals(UpdatePhaseDto.entries.size, UpdatePhase.entries.size)
     }
 
     private fun task(status: Int, seeding: Int) = TaskDto(

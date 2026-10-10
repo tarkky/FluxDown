@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.compose.runtime.snapshots.SnapshotStateSet
 import androidx.datastore.preferences.preferencesDataStore
 import com.fluxdown.app.data.AppearanceRepo
+import com.fluxdown.app.data.DeviceSettings
 import com.fluxdown.app.data.HostRepo
 import com.fluxdown.app.data.SecretBox
 import com.fluxdown.app.data.ViewPrefsRepo
@@ -22,6 +23,8 @@ import com.fluxdown.core.model.HostRef
 import com.fluxdown.core.model.SelectionOutcome
 import com.fluxdown.core.store.HostState
 import com.fluxdown.core.store.HostStore
+import com.fluxdown.app.update.AppUpdateController
+import com.fluxdown.app.update.UpdateCheckJobService
 import com.fluxdown.fluxui.theme.FluxFonts
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -57,6 +60,11 @@ class FluxApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        // 周期后台检查按「自动检查」开关登记 / 取消（幂等；不持久化，每次冷启动重登）。
+        // 偏好读取与 JobScheduler binder 调用放 IO，不占冷启动主线程。
+        container.appScope.launch(Dispatchers.IO) {
+            UpdateCheckJobService.sync(this@FluxApplication, DeviceSettings.of(this@FluxApplication).updateAutoCheck)
+        }
         // 冷启动在后台解析字体文件，避免首帧在主线程加载 ~5MB 字体
         container.appScope.launch(Dispatchers.IO) { FluxFonts.preload(this@FluxApplication) }
     }
@@ -83,6 +91,13 @@ class AppContainer(context: Context) {
     val appearance = AppearanceRepo(context.prefs)
     val viewPrefs = ViewPrefsRepo(context.prefs)
     val store = HostStore(storeScope)
+
+    /** 应用自更新（惰性创建：首次用到才加载更新器；与当前主机无关）。 */
+    val updates: AppUpdateController by lazy {
+        AppUpdateController(appContext, appScope, DeviceSettings.of(appContext)) {
+            localActivity.value.let { it.active + it.pending + it.retryPending }
+        }
+    }
 
     private val hostRepo = HostRepo(context.prefs, SecretBox())
     private val localRef = HostRef.Local(displayName = Build.MODEL.orEmpty().ifBlank { "Android" })
