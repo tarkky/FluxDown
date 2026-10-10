@@ -121,7 +121,7 @@ pub struct MarketIndex {
     pub entries: Vec<MarketEntry>,
 }
 
-/// 插件包体积上限（10MB，与 hub/server 安装上限一致）。
+/// 插件包体积上限（10MB，与管理 API 安装上限一致）。
 const MAX_FXPLUG_BYTES: usize = 10 * 1024 * 1024;
 /// 索引 JSON 体积上限（流式截断防 OOM；真实索引远小于此，被投毒/损坏的源
 /// 可能返回任意大响应，`.text()` 全量缓冲会被撑爆）。

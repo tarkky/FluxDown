@@ -1,6 +1,4 @@
-//! 「新建下载」表单：字段、顺序与提交语义与
-//! `lib/src/widgets/new_download_dialog.dart` 逐条对齐；纯规则见
-//! [`crate::model::new_download`]。
+//! 「新建下载」表单：字段、校验与提交；纯规则见 [`crate::model::new_download`]。
 //!
 //! 浏览器扩展 / NMH 的外部捕获也在本表单确认：捕获条目以链接行呈现（可与手填链接混合），
 //! 提交时经 `agent.capture.resolve` 确认，Cookie / 请求头 / 请求体等上下文由 agent 合并；
@@ -130,7 +128,7 @@ pub fn new_download_targets(
     other_devices(cloud, linked, cloud_current, service_current)
 }
 
-/// 与 Dart 一致：偏好 `remember_last_save_dir` 开启且有记录时沿用上次目录，否则用全局
+/// 偏好 `remember_last_save_dir` 开启且有记录时沿用上次目录，否则用全局
 /// 默认（`default_save_dir`，空则 daemon 运行时目录）；队列优先 `selected_queue`，其次配置
 /// `default_queue_id`，最后主队列；线程数优先队列 `default_segments`，其次全局配置。
 pub(crate) fn build_new_download_context(
@@ -216,7 +214,7 @@ struct HeaderRow {
     value: Entity<InputState>,
 }
 
-/// HTTP 认证框的站点凭据自动回填状态（规则同 Dart `_maybeAutofillSiteAuth`）。
+/// HTTP 认证框的站点凭据自动回填状态。
 #[derive(Default)]
 struct AuthAutofill {
     /// 两框当前值来自站点凭据自动回填（链接换站点时可被更新 / 清空）。
@@ -844,7 +842,7 @@ impl NewDownloadView {
         map
     }
 
-    /// 草稿 → 请求（与 Dart `_startDownloadInner` 同序同规则）。
+    /// 草稿 → 请求选项。
     fn draft_options(&self, later: bool, queue_override: Option<String>, cx: &App) -> DraftOptions {
         let queue_id = queue_override.unwrap_or_else(|| {
             if later {

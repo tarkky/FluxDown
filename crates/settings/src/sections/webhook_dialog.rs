@@ -1,5 +1,4 @@
-//! Webhook 端点新增 / 编辑对话框：字段、校验、实时预览与测试投递语义与
-//! `lib/src/widgets/webhook_endpoint_dialog.dart` 逐条对齐。
+//! Webhook 端点新增 / 编辑对话框：字段、校验、实时预览与测试投递。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,15 +34,15 @@ use crate::store::SettingsStore;
 use crate::ui::dialog_footer;
 
 const PRESET_CUSTOM: &str = "custom";
-/// 与 Dart `WebhookEvents.defaults` 一致。
+/// 默认订阅任务完成与失败事件。
 const DEFAULT_EVENTS: &[&str] = &["task.completed", "task.failed"];
-/// 对话框宽度：左表单 + 右实时预览双栏（与 Flutter `maxWidth: 900` 对齐）；
+/// 对话框宽度：左表单 + 右实时预览双栏；
 /// gpui-component 0.7 会按视口自动收窄，小窗口不会溢出。
 const DIALOG_WIDTH: f32 = 900.;
-/// 双栏区域高度（与 Flutter 512 对齐）：固定高度让「高级」展开 / 收起时对话框不跳动，
+/// 双栏区域高度：固定高度让「高级」展开 / 收起时对话框不跳动，
 /// 表单超出部分在左栏内滚动；视口不够高时随对话框一起收缩。
 const BODY_HEIGHT: f32 = 512.;
-/// 右栏预览宽度（与 Flutter 300 对齐）。
+/// 右栏预览宽度。
 const PREVIEW_WIDTH: f32 = 300.;
 
 /// 预览用样例变量——与引擎 `WebhookEvent::sample()` 对齐，仅用于预览。
@@ -78,7 +77,7 @@ fn sample_var(key: &str) -> Option<&'static str> {
         .map(|(_, value)| *value)
 }
 
-/// `application/x-www-form-urlencoded` 组件编码（Dart `Uri.encodeQueryComponent`）。
+/// `application/x-www-form-urlencoded` 组件编码。
 pub(crate) fn form_encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
@@ -227,7 +226,7 @@ fn random_bytes<const N: usize>() -> [u8; N] {
     bytes
 }
 
-/// HMAC 密钥起点（`whsec_` + 32 位十六进制），与 Dart `generateWebhookSecret` 同形。
+/// HMAC 密钥起点（`whsec_` + 32 位十六进制）。
 pub(crate) fn generate_secret() -> String {
     let mut out = String::with_capacity(6 + 32);
     out.push_str("whsec_");
@@ -489,7 +488,7 @@ impl WebhookDialog {
             && self.url_error(cx).is_none()
     }
 
-    /// 草稿 → 模型（与 Dart `_draft` 同序同规则）。
+    /// 草稿 → 模型。
     fn draft(&self, cx: &App) -> EndpointSpec {
         let mut headers = BTreeMap::new();
         for row in &self.headers {
@@ -578,7 +577,7 @@ impl WebhookDialog {
         cx.notify();
     }
 
-    /// 复制密钥；按钮文案短暂变为「已复制」（对应 Flutter 的 2s toast）。
+    /// 复制密钥；按钮文案短暂变为「已复制」。
     fn copy_secret(&mut self, cx: &mut Context<Self>) {
         let text = self.secret.read(cx).value().to_string();
         cx.write_to_clipboard(ClipboardItem::new_string(text));

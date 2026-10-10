@@ -145,7 +145,7 @@ pub fn demo_allows(demo_url: Option<&str>, url: &str) -> bool {
 /// [`fluxdown_protocol::DAEMON_CONFIG_FIELDS`]）。
 ///
 /// 规范化后的布尔值再按引擎落库编码转写：`bt_seed_enabled` /
-/// `bt_auto_reseed` 在引擎侧按 `"0"` 判定关闭（Flutter 也写 `'1'`/`'0'`），
+/// `bt_auto_reseed` 在引擎侧按 `"0"` 判定关闭（保持既有 `'1'`/`'0'` 编码），
 /// 若原样写入 `"false"` 引擎会视为开启。
 pub fn validate_config_patch(
     values: &BTreeMap<String, String>,
@@ -182,7 +182,7 @@ pub fn public_config_values(all: &HashMap<String, String>) -> BTreeMap<String, S
 /// 从持久化配置构建完整 BT 运行配置。
 ///
 /// `bt_seed_time_limit_minutes` / `bt_seed_inactive_time_limit_minutes` 落库
-/// 时已是分钟；`*_unit` 键仅记录设置页的展示单位（Flutter / hub 同义），
+/// 时已是分钟；`*_unit` 键仅记录设置页的展示单位，
 /// 引擎 [`fluxdown_engine::bt_downloader::BtConfig`] 直接取分钟值。
 /// `bt_seed_enabled` / `bt_auto_reseed` 不在 `BtConfig` 内：引擎在完成 /
 /// 启动时实时读库，落库即生效。

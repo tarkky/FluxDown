@@ -15,7 +15,7 @@
 #   APPLE_API_KEY_PATH + APPLE_API_KEY_ID + APPLE_API_ISSUER_ID   提供时执行公证与 staple
 #   FLUXCLOUD_BASE_URL     透传给 agent 编译期（见 native/agent/src/runtime.rs）
 #   OUT_DIR                默认 build/gpui-macos
-#   VERSION                产物版本（默认取 pubspec.yaml；release 传 tag 版本，可带 -rc.N）
+#   VERSION                产物版本（默认取 cargo metadata 的 fluxdown_ui_app.version；release 传 tag 版本，可带 -rc.N）
 #   ARTIFACT_PREFIX        产物名前缀（默认 FluxDown-GPUI-$VERSION-macos-<suffix>；release 传
 #                          FluxDown-$VERSION-macos-<x64|arm64>），生成 <prefix>.dmg 与 <prefix>.tar.gz
 set -euo pipefail
@@ -31,7 +31,28 @@ HELPER_NAME=FluxDownAgent.app
 # GPUI 上游最低支持 10.15.7；Apple Silicon 由系统限定为 11.0 起。
 MIN_X86=10.15.7
 MIN_ARM=11.0
-VERSION=${VERSION:-$(sed -nE 's/^version: *([^+]+).*/\1/p' pubspec.yaml | head -1)}
+if [ -z "${VERSION:-}" ]; then
+  if ! METADATA=$(cargo metadata --no-deps --format-version 1); then
+    echo "failed to read cargo metadata for the default VERSION" >&2
+    exit 1
+  fi
+  PACKAGE_INDEX=0
+  while PACKAGE_NAME=$(plutil -extract "packages.$PACKAGE_INDEX.name" raw -o - - <<<"$METADATA" 2>/dev/null); do
+    if [ "$PACKAGE_NAME" = fluxdown_ui_app ]; then
+      if ! VERSION=$(plutil -extract "packages.$PACKAGE_INDEX.version" raw -o - - <<<"$METADATA"); then
+        echo "failed to read fluxdown_ui_app.version from cargo metadata" >&2
+        exit 1
+      fi
+      break
+    fi
+    PACKAGE_INDEX=$((PACKAGE_INDEX + 1))
+  done
+  if [ -z "${VERSION:-}" ]; then
+    echo "cargo metadata did not provide a version for fluxdown_ui_app" >&2
+    exit 1
+  fi
+  unset METADATA PACKAGE_INDEX PACKAGE_NAME
+fi
 # Info.plist 版本号只接受数字点分，去掉预发布后缀
 PLIST_VERSION=${VERSION%%-*}
 

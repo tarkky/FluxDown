@@ -1,7 +1,7 @@
 # ── GPUI 桌面客户端调试包（手动触发，不发 Release）──
 # 产出 fluxdown-desktop + fluxdown-agent + fluxdownd 三个同级可执行文件的压缩包，
-# 供在真实 Windows / Linux / macOS 机器上调试 GPUI 客户端。Flutter App、server、
-# Android 不在此流程内（Flutter 测试包见 test-package.yml）。
+# 供在真实 Windows / Linux / macOS 机器上调试 GPUI 客户端。server 与移动端不在此流程内，
+# 原生 Android / iOS 测试包见 test-package.yml。
 #
 # 为什么不提供 debug profile：gpui_windows 在 debug_assertions 下运行时从
 # env!("CARGO_MANIFEST_DIR") 读取 shaders.hlsl，该路径是构建机的绝对路径，

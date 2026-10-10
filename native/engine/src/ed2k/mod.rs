@@ -426,7 +426,7 @@ async fn run_ed2k_download_inner(params: &DownloadParams) -> Result<(i64, String
     }
 
     // 服务器来源合并：用户手填列表（ed2k_server_list）+ 订阅缓存
-    // （ed2k_server_sub_cache，由 hub 定期刷新 server.met 写入）。
+    // （ed2k_server_sub_cache，由宿主定期刷新 server.met 写入）。
     let manual_cfg = params
         .db
         .get_config("ed2k_server_list")
@@ -463,7 +463,7 @@ async fn run_ed2k_download_inner(params: &DownloadParams) -> Result<(i64, String
 
     let hashset_cache: Arc<OnceCell<Vec<[u8; 16]>>> = Arc::new(OnceCell::new());
     let client = shared_client();
-    // 客户端配置：监听端口/UPnP/Kad 开关来自 DB（hub 首启注入默认）。
+    // 客户端配置：监听端口/UPnP/Kad 开关来自 DB。
     let listen_port = params
         .db
         .get_config("ed2k_listen_port")
@@ -490,7 +490,7 @@ async fn run_ed2k_download_inner(params: &DownloadParams) -> Result<(i64, String
         enable_kad,
     });
     let _active_task = client.begin_task();
-    // Kad bootstrap 节点（nodes.dat，base64 缓存，由 hub 后台刷新）。
+    // Kad bootstrap 节点（nodes.dat，base64 缓存，由宿主后台刷新）。
     let nodes_dat: Vec<u8> = if enable_kad {
         use base64::Engine as _;
         params
@@ -628,7 +628,7 @@ async fn run_ed2k_download_inner(params: &DownloadParams) -> Result<(i64, String
                 if pending.is_empty() {
                     break Ok(());
                 }
-                // 重读服务器列表并重配客户端：hub 后台刷新（含缓存版本失效重取）
+                // 重读服务器列表并重配客户端：宿主后台刷新（含缓存版本失效重取）
                 // 完成后，本轮即可用上修正后的服务器，无需重启。
                 {
                     let manual = params

@@ -26,7 +26,7 @@ public enum WebhookTemplate {
         "{ntfy.topic}": "my-topic",
     ]
 
-    /// `application/x-www-form-urlencoded` 组件编码（Dart `Uri.encodeQueryComponent`）。
+    /// `application/x-www-form-urlencoded` 组件编码。
     public static func formEncode(_ value: String) -> String {
         var out = ""
         for byte in value.utf8 {
@@ -142,7 +142,7 @@ public enum WebhookTemplate {
         return "webhookUrlInvalid"
     }
 
-    /// HMAC 密钥起点（`whsec_` + 32 位十六进制），与 Dart `generateWebhookSecret` 同形。
+    /// HMAC 密钥起点（`whsec_` + 32 位十六进制）。
     public static func generateSecret() -> String {
         var hex = ""
         for _ in 0 ..< 16 { hex += String(format: "%02x", Int(UInt8.random(in: 0 ... 255))) }

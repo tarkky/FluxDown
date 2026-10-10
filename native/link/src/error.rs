@@ -1,7 +1,7 @@
 //! 本地设备互联（device link）错误类型。
 
 /// 设备互联子系统的统一错误。HTTP 宿主层把它映射为响应状态码，
-/// Dart 宿主层把它转成 `LinkEvent` 的错误信号。
+/// agent `link/service.rs` 把它转成 `LinkEvent` 的错误信号。
 #[derive(Debug, thiserror::Error)]
 pub enum LinkError {
     /// 配对码不存在 / 已过期 / 已被使用。

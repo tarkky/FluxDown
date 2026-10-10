@@ -1482,7 +1482,7 @@ async fn patch_config(
             other => ActorError::Operation(format!("{other:#}")),
         })?;
     // DB 与 revision 已提交：即便在线应用失败，也必须广播已提交快照，
-    // 否则 hub 快照与 DB revision 分叉，后续 patch 会一直冲突。
+    // 否则事件快照与 DB revision 分叉，后续 patch 会一直冲突。
     let applied = apply_live_config(engine, &merged, values.keys()).await;
     let snapshot = fluxdown_protocol::DaemonConfigSnapshot {
         revision,
@@ -1495,8 +1495,7 @@ async fn patch_config(
     Ok(snapshot)
 }
 
-/// 清空引擎学习的域名连接策略（内存 + 持久化，与 hub 收到空
-/// `domain_conn_caps` 时的处理同态），并以刷新后的公开配置广播
+/// 清空引擎学习的域名连接策略（内存 + 持久化），并以刷新后的公开配置广播
 /// `ConfigChanged`（该只读键随快照可见）。用户配置 revision 不变。
 async fn clear_conn_policy(
     engine: &mut Engine,
@@ -1611,8 +1610,7 @@ async fn upsert_site_auth(
     Ok(fluxdown_protocol::SiteAuthEntryDto { site, user })
 }
 
-/// 请求未指定队列时套用设置项 `default_queue_id`（与 Flutter 新建对话框
-/// 预选默认队列同义）；默认队列为空或已被删除时保持空串，由引擎归入
+/// 请求未指定队列时套用设置项 `default_queue_id`；默认队列为空或已被删除时保持空串，由引擎归入
 /// 内置主队列。
 async fn resolve_queue_id(
     db: &fluxdown_engine::db::Db,

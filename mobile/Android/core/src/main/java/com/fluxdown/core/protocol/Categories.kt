@@ -4,7 +4,7 @@ import com.fluxdown.core.format.UrlText
 
 /**
  * 自定义分类（偏好键 `custom_categories`，与 `native/protocol/src/agent.rs::CustomCategoryDto`、
- * Dart / Web 同 JSON 形状；对应 iOS `Preferences.swift` 的 `CustomCategoryDto`）。
+ * GPUI / Web 同 JSON 形状；对应 iOS `Preferences.swift` 的 `CustomCategoryDto`）。
  *
  * 与 `core.model.Category`（主机快照下发、只用于匹配的投影）不同，这里保留编辑所需的全部字段
  * （匹配模式 / 保存目录 / 内置标记）。
@@ -30,7 +30,7 @@ data class CustomCategoryDto(
     val hasMatchRules: Boolean get() = !(isAll || isOther)
     val isRegex: Boolean get() = matchMode == "regex"
 
-    /** 与 Dart / Web 同形：`builtinType` 为空时写显式 `null`。 */
+    /** 与 Web 同形：`builtinType` 为空时写显式 `null`。 */
     fun toJson(): JsonValue = jsonObject(
         "id" to id,
         "name" to name,
@@ -157,7 +157,7 @@ object CategoryRules {
 
     /**
      * 分类显示名 → 目录名：非法字符（`\ / : * ? " < > |` 与控制字符）换空格、压缩空白、去掉 Windows 会丢弃的
-     * 结尾点 / 空格（`sanitizeCategoryDirName`，GPUI / Dart / Web 同规）。
+     * 结尾点 / 空格（`sanitizeCategoryDirName`，GPUI / Web 同规）。
      */
     fun sanitizeDirName(label: String): String {
         val replaced = buildString(label.length) {
@@ -306,7 +306,7 @@ object CategoryRules {
     }
 
     /**
-     * 外部唤起的分类保存目录（同 agent `category_dir.rs::category_save_dir` / Flutter `resolveCategorySaveDir`）：
+     * 外部唤起的分类保存目录（同 agent `category_dir.rs::category_save_dir`）：
      * 只看可见分类、按 [list] 顺序（调用方传 [CustomCategoryDto.fromPreference] 的已排序结果）；先取首个
      * 配置了目录且命中的普通分类（非 all / other），否则文件不命中任何普通分类时取 other 的目录。
      * [fileName] 不含 `.` 时用 URL 路径末段（百分号解码后含 `.`）参与匹配；无命中 / 未配置目录返回 null。

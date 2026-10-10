@@ -12,7 +12,7 @@ import { Badge, Button, Card, Icon, Input, InputWithAction, ProgressBar, Select,
 import { extensionErrorText } from './errors'
 import { formatBytes } from './logic'
 
-/** 固定展示顺序（与 Flutter / GPUI 组件页一致）。 */
+/** 固定展示顺序（与 GPUI 组件页一致）。 */
 const COMPONENT_KINDS: readonly ComponentKind[] = ['ffmpeg', 'ytdlp']
 
 /** 手动指定可执行文件路径的 daemon 配置键（与引擎 `CONFIG_*_PATH` 一致）。 */

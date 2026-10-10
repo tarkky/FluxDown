@@ -1,7 +1,7 @@
 //! 需要宿主(有 UI 的一端)介入决策的选择点:HLS 画质选择、BT 文件选择。
 //!
 //! 现状(已核实,见项目历史会话记录):HLS/BT 的用户选择答案是通过独立
-//! 后到的 `DartSignal`(`SelectHlsQuality`/`SelectBtFiles`)分别投递的,与
+//! 后到的客户端选择消息(`SelectHlsQuality`/`SelectBtFiles`)分别投递的,与
 //! "发起选择"调用点解耦,不是一次 `.await` 闭环完成。因此 [`HostSelection`]
 //! 同时包含"发起等待"与"投递答案"两类方法。
 
@@ -65,8 +65,7 @@ pub trait HostSelection: Send + Sync {
     ) -> SelectionOutcome<i32>;
 
     /// 发起 BT 文件选择等待;`timeout` 为 `None` 时保留现状"无限等待"语义,
-    /// 为 `Some(d)` 时到期返回 `TimedOutDefaulted`(供 hub 侧包一个较长但
-    /// 有限的超时)。
+    /// 为 `Some(d)` 时到期返回 `TimedOutDefaulted`（供宿主指定有限超时）。
     async fn select_bt_files(
         &self,
         task_id: &str,
@@ -85,13 +84,11 @@ pub trait HostSelection: Send + Sync {
         timeout: Duration,
     ) -> SelectionOutcome<i32>;
 
-    /// 投递 HLS 画质选择答案(由收到 `SelectHlsQuality` DartSignal 的 hub 侧
-    /// 调用),唤醒对应 [`select_hls_quality`](HostSelection::select_hls_quality)
-    /// 的等待。
+    /// 投递宿主收到的 HLS 画质选择答案，唤醒对应
+    /// [`select_hls_quality`](HostSelection::select_hls_quality) 的等待。
     fn provide_hls_selection(&self, task_id: &str, selected_index: i32);
 
-    /// 投递 BT 文件选择答案(由收到 `SelectBtFiles` DartSignal 的 hub 侧调用,
-    /// 该信号字段名为 `selected_indices`,见 `hub::signals::SelectBtFiles`),
+    /// 投递宿主收到的 BT 文件选择答案，
     /// 唤醒对应 [`select_bt_files`](HostSelection::select_bt_files) 的等待。
     fn provide_bt_selection(&self, task_id: &str, selected_indices: Vec<i32>);
 
@@ -102,7 +99,7 @@ pub trait HostSelection: Send + Sync {
 
     /// 当前是否有能作答交互选择的宿主界面在线。为 false 时引擎不会为「文件已存在」
     /// 询问让出并发槽挂起任务，直接按回退值（重命名）继续。默认 false（headless /
-    /// Flutter hub / CLI 本地模式 / 测试）。
+    /// CLI 本地模式 / 测试）。
     fn can_prompt(&self) -> bool {
         false
     }

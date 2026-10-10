@@ -16,7 +16,7 @@
 //!
 //! # 模块职责
 //! - [`manifest`]：`PluginManifest`/`SettingField` + 手写校验器 + `url_glob_match`。
-//! - [`semver`]：engine-local `parse_semver`/`satisfies_min`（复刻 hub updater 语义）。
+//! - [`semver`]：engine-local `parse_semver`/`satisfies_min`（三段版本比较）。
 //! - [`runtime`]：抽象层 —— `ScriptRuntime`/`PluginBridge` trait + 跨 JS 边界结构体，
 //!   本文件禁止出现任何 rquickjs 类型，未来可换 deno_core。
 //! - [`quickjs`]：v1 唯一实现 `QuickJsScriptRuntime`，rquickjs 类型仅存在于本文件。

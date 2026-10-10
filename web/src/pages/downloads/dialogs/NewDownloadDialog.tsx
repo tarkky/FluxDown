@@ -47,7 +47,7 @@ interface FormContext {
   segments: number
 }
 
-/** 与 Dart 一致：开启「记住上次目录」且有记录时沿用；队列优先入参、其次配置 `default_queue_id`、最后主队列。 */
+/** 开启「记住上次目录」且有记录时沿用；队列优先入参、其次配置 `default_queue_id`、最后主队列。 */
 function buildContext(snapshot: AgentSnapshot | null, wantedQueue: string | undefined): FormContext {
   const config = snapshot?.daemon.config.values ?? {}
   const prefs = (snapshot?.preferences.values ?? {}) as Record<string, unknown>
@@ -179,7 +179,7 @@ export function NewDownloadDialog({ session }: { session: NewDownloadSession }) 
     }
   }, [session.injections, saveDir, context.queueId])
 
-  // ── 站点凭据自动回填（规则同 Dart `_maybeAutofillSiteAuth`）──
+  // ── 站点凭据自动回填 ──
   const authDirty = useRef(false)
   const authFilled = useRef(false)
   const usesBrowserAuth =

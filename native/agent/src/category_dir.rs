@@ -1,5 +1,5 @@
-//! 外部捕获的分类保存目录：与 Flutter `SettingsProvider.resolveCategorySaveDir` /
-//! `CustomCategory.matches` 同语义。
+//! 外部捕获的分类保存目录（规则唯一事实源；原生 Android `Categories.kt::CategoryRules.saveDirFor`
+//! 镜像同一语义）。
 //!
 //! 只看可见分类，按 `position` 顺序；先找首个配置了目录且命中的普通分类（非 all / other），
 //! 否则当文件不命中任何普通分类时取 `other` 的目录。文件名为空或不含 `.` 时用 URL 路径末段

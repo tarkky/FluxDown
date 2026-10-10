@@ -49,7 +49,7 @@ pub const MAX_EXTRA_LINKS: usize = 3;
 /// 换了地址（键含本地 IP）会自然重新纳入。
 const LINK_FAIL_TTL: Duration = Duration::from_secs(300);
 
-/// `links_off` 事件的原因码（wire 契约：Flutter 详情日志按码本地化）。
+/// `links_off` 事件的原因码（wire 契约：客户端详情日志按码本地化）。
 pub mod off_reason {
     /// 任务走代理（含 Auto 多路径）：出口是代理，绑定网卡没有意义。
     pub const PROXY: &str = "proxy";

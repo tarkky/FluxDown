@@ -1,7 +1,7 @@
 //! `fluxdown_engine` —— FluxDown 下载引擎,零 FFI 依赖。
 //!
 //! 本 crate 承载 HTTP/FTP/BT/HLS/DASH 下载核心逻辑,通过 [`events::EventSink`]
-//! 与 [`selection::HostSelection`] 两个 trait 与宿主(hub/CLI/Web+Server/Phone)
+//! 与 [`selection::HostSelection`] 两个 trait 与宿主（daemon / CLI / 原生移动端）
 //! 解耦,不绑定具体的 FFI/信号/传输协议。
 
 /// 插件通用认证凭据存储与请求注入。
@@ -345,7 +345,7 @@ impl Engine {
             manager.install_plugin_manager(pm);
         }
         // 装载 RSS 订阅到内存镜像——放在引擎构造而非交给宿主，保证任何
-        // 宿主（hub/server/CLI --local）都不必记得这一步就能让轮询生效。
+        // 宿主（daemon / CLI --local）都不必记得这一步就能让轮询生效。
         manager.rss.load().await;
         // 同理装载 webhook 端点表：桌面 / headless / CLI --local 共享 config
         // 表，任何宿主都无需额外接线即可获得任务事件推送。
@@ -404,8 +404,8 @@ impl Engine {
     ///
     /// 封装原本被 `download_actor.rs` 绕过 `DownloadManager` 直接调用的
     /// 自由函数 `bt_downloader::probe_torrent_meta`;内部 `spawn_blocking`,
-    /// 把"不阻塞 current_thread runtime"这条现由 hub 手动承担的责任收进
-    /// Engine 内部。解析本身是纯 CPU 计算(无网络),`spawn_blocking` 的
+    /// 把“不阻塞宿主 runtime”的责任收进 Engine 内部。
+    /// 解析本身是纯 CPU 计算(无网络),`spawn_blocking` 的
     /// `JoinError`(仅 panic 才会发生)转换为一条 `TorrentMetaResult.error`,
     /// 而不是让调用方处理一个额外的 `Result` 分支。
     pub async fn probe_torrent_meta(
@@ -430,8 +430,7 @@ impl Engine {
     /// 投递日志快照（新的在前，上限 [`webhook::MAX_DELIVERY_LOG`]）。
     ///
     /// 日志的读路径是 [`webhook::WebhookDispatcher`] 的内存环形缓冲（启动时
-    /// 从 `webhook_deliveries` 表回灌），宿主必须经此读取：hub 走信号对，
-    /// server 走 REST。
+    /// 从 `webhook_deliveries` 表回灌），宿主必须经此读取并转换为协议响应。
     pub fn webhook_deliveries(&self) -> Vec<webhook::WebhookDelivery> {
         self.manager.webhook().deliveries()
     }

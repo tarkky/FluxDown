@@ -18,7 +18,7 @@ export default defineConfig({
   //   1. 运行 `npm run dev` 构建扩展到 .output/chrome-mv3-dev/
   //   2. 打开正式 Chrome → 扩展管理页 → 开启开发者模式
   //   3. "加载已解压的扩展" → 选择 fluxDown/.output/chrome-mv3-dev/
-  //   4. 启动 FluxDown App（flutter run -d macos）
+  //   4. 启动 FluxDown GPUI 桌面客户端并启用浏览器扩展连接
   //   5. 在正式 Chrome 里测试扩展连接状态
   //
   // WXT dev Chrome 仍可用于调试 UI / 下载拦截逻辑，只是连接状态始终显示"未连接"属正常。

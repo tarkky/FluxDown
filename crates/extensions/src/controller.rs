@@ -9,7 +9,7 @@ use fluxdown_protocol::{
 
 use crate::{ExtensionsPort, PortFuture};
 
-/// 受管组件的固定展示顺序（与 Flutter 组件页一致）。
+/// 受管组件的固定展示顺序。
 pub const COMPONENT_KINDS: [ComponentKind; 2] = [ComponentKind::Ffmpeg, ComponentKind::Ytdlp];
 
 /// 组件在 [`COMPONENT_KINDS`] 中的下标；view 端按此索引存放每个组件的 UI 状态。

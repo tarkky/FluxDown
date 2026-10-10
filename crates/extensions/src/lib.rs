@@ -34,7 +34,7 @@ pub trait ExtensionsPort: Send + Sync {
     ) -> PortFuture<serde_json::Value>;
 }
 
-/// 扩展分类的子页（与 Flutter `extensions→[plugins, components]` 一致）。
+/// 扩展分类的子页：插件与受管组件。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExtensionsTab {
     Plugins,

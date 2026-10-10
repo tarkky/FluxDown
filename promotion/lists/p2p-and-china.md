@@ -174,18 +174,18 @@ aria2.onDownloadComplete aria2.onDownloadError    aria2.onBtDownloadComplete
 Rust 写的开源多协议下载管理器，IDM 的免费替代品
 ```
 
-**项目描述**（172 字，落在 32–256 区间；重写而非复制 README）：
+**项目描述**（提交时按模板 32–256 字限制核对）：
 ```
-FluxDown 用 Rust + Tokio 写下载引擎、Flutter 做界面，把 HTTP/FTP、BitTorrent 磁力、eD2K/Kad、HLS 与 DASH 收进同一个任务队列。它做 IDM 式动态分段：不是开固定线程数，而是在下载过程中把还没下完的区间继续切开分给空闲连接，慢速节点不会拖住整条任务。装上浏览器扩展后网页里的下载会被自动接管，断点续传落在 SQLite WAL 上，杀进程也不丢进度。
+FluxDown 用 Rust + Tokio 写下载引擎，PC 使用 GPUI，Android/iOS 使用 Kotlin Compose / SwiftUI 原生界面，把 HTTP/FTP、BitTorrent 磁力、eD2K/Kad、HLS 与 DASH 收进同一个任务队列。它做 IDM 式动态分段：不是开固定线程数，而是在下载过程中把还没下完的区间继续切开分给空闲连接，慢速节点不会拖住整条任务。装上浏览器扩展后网页里的下载会被自动接管，断点续传落在 SQLite WAL 上，杀进程也不丢进度。
 ```
 
 **亮点**：
 ```
 1. 分段策略是 IDM 那套「运行时再切分」，不是常见的 aria2 式固定 -x N 连接，慢节点不拖累整体；
-2. 引擎是零 FFI 的纯 Rust crate（native/engine），Flutter 通过 Rinf signals 通信，不走 dart:ffi 也不起子进程；
+2. 引擎是零 FFI 的纯 Rust crate（native/engine）；GPUI 经 agent/daemon 链路使用，原生移动端经 UniFFI（native/mobile）复用进程内 agent/daemon 或连接远端主机；
 3. 内置 aria2 JSON-RPC 兼容层，覆盖官方 36 个方法全集、27 个真实实现，AriaNg 和各种「发送到 aria2」油猴脚本可以直接对接；
 4. 内置 MCP server（Streamable HTTP，12 个工具），Claude Desktop / Cursor 这类 AI 客户端能直接管理下载任务；
-5. 同一套代码跑桌面（Win/macOS/Linux）、Android 和 headless 服务端（fluxdown_server + Web UI，支持群晖 spk / QNAP qpkg / OpenWrt ipk / Unraid / CasaOS）。
+5. 共享 Rust 核心服务桌面（Win/macOS/Linux）、原生 Android/iOS 与 headless 服务端（fluxdown-agent --server + fluxdownd + Web UI，支持群晖 spk / QNAP qpkg / OpenWrt ipk / Unraid / CasaOS）。
 ```
 
 **截图**：直接拖 3 张 —— 主界面（含分段进度条）、亮/暗主题对比、AriaNg 连上 FluxDown 的截图（第 3 张是最有说服力的差异化证据）。
@@ -215,7 +215,7 @@ FluxDown 用 Rust + Tokio 写下载引擎、Flutter 做界面，把 HTTP/FTP、B
 官网：https://fluxdown.zerx.dev
 协议：AGPL-3.0
 
-FluxDown 是一个多协议下载管理器，Rust + Tokio 写引擎、Flutter 做界面，目标是做 IDM 的开源替代。
+FluxDown 是一个多协议下载管理器，Rust + Tokio 写引擎，PC 用 GPUI、Android/iOS 用 Kotlin Compose / SwiftUI，目标是做 IDM 的开源替代。
 
 **它和常见下载器不一样的地方：**
 
@@ -227,7 +227,7 @@ FluxDown 是一个多协议下载管理器，Rust + Tokio 写引擎、Flutter �
 - 浏览器扩展（Chrome/Edge/Firefox）接管网页下载。
 
 **平台**：Windows (x64/ARM64)、macOS (Intel/Apple Silicon)、Linux (AppImage/deb/Arch/tar.gz)、Android (按 ABI 分包)。
-另有 headless 服务端 `fluxdown_server`（Web UI 端口 17800，镜像 `ghcr.io/zerx-lab/fluxdown-server`，amd64 + arm64 多架构），支持群晖 spk / QNAP qpkg / OpenWrt ipk / Unraid / CasaOS。
+另有 headless 服务端 `fluxdown-agent --server` + `fluxdownd`（Web UI 端口 17800，镜像 `ghcr.io/zerx-lab/fluxdown-server`，amd64 + arm64 多架构），支持群晖 spk / QNAP qpkg / OpenWrt ipk / Unraid / CasaOS。
 ```
 
 ---

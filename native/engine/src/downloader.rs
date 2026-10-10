@@ -552,9 +552,9 @@ pub struct RequestSpec {
 }
 
 /// 浏览器扩展/Native Messaging 捕获的原始请求体——引擎侧的传输无关表示。
-/// `hub` 侧从 `native_messaging::RequestBody`(wire 格式,字段名受 NM 协议
-/// 约束)转换为此类型后再调用 [`RequestSpec::from_captured`],使得
-/// `downloader`/`download_manager` 不直接依赖 `native_messaging`。
+/// 捕获请求的宿主从 Native Messaging wire 格式转换为此类型后再调用
+/// [`RequestSpec::from_captured`]，使得 `downloader` / `download_manager`
+/// 不直接依赖 Native Messaging 协议。
 #[derive(Debug, Clone)]
 pub enum CapturedRequestBody {
     FormData {
@@ -1020,7 +1020,7 @@ pub fn maybe_decompress_stream(
 /// [`resolve_file_info`]).
 ///
 /// **Version rule（同 aria2 的 `aria2/<版本>`）**：release 构建为
-/// `FluxDown/<pubspec 版本号>`（build.rs 注入 `FLUXDOWN_APP_VERSION`），
+/// `FluxDown/<产品版本>`（build.rs 注入 `FLUXDOWN_APP_VERSION`，缺省 crate 版本），
 /// debug 构建固定 `FluxDown/1.0`。
 const DEFAULT_UA: &str = if cfg!(debug_assertions) {
     "FluxDown/1.0"
@@ -3197,7 +3197,7 @@ async fn run_download_inner(p: &DownloadParams) -> Result<(i64, Option<String>),
 
     p.db.update_task_status(&p.task_id, 1, "").await?;
 
-    // Immediately notify Dart: status=1 with resolved file name & total size.
+    // Immediately notify the host: status=1 with resolved file name & total size.
     // For resume tasks, send persisted downloaded bytes as baseline so speed
     // smoothing doesn't treat resumed bytes as a fresh in-interval delta.
     let initial_downloaded = resume_downloaded;
@@ -4558,7 +4558,7 @@ async fn download_single_once(
     }
 
     // 注：旧版本会从实际下载响应的 Content-Disposition 中提取"更好的文件名"，
-    // 写入 DB 并通知 Dart UI。该机制已移除——新架构下文件名由 DownloadManager
+    // 写入 DB 并通知宿主 UI。该机制已移除——新架构下文件名由 DownloadManager
     // 在 do_start_task 同步段统一决策（probe 阶段已读取 Content-Disposition），
     // downloader 内部不再变更文件名，避免与 manager 的 reserved_temp_paths
     // 协调断裂导致并发下载冲突（参见 PR #296 自我冲突回归 bug）。
@@ -4647,7 +4647,7 @@ async fn download_single_once(
                         let len = chunk_len as i64;
                         downloaded += len;
 
-                        // Progress report to Dart — every 200ms for smooth UI.
+                        // Progress report to the host — every 200ms for smooth UI.
                         if last_report.elapsed().as_millis() >= 200 && !progress_tx.is_closed() {
                             if progress_tx
                                 .send(ProgressUpdate {

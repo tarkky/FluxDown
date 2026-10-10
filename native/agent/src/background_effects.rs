@@ -14,7 +14,7 @@ use crate::notification::{
     NoticeText, Notifier, completion_path, completion_text, english_text, rss_auto_download_text,
 };
 
-/// 完成通知防抖：最后一次完成后静默这么久才合并发一条（同 Flutter `NotificationService`）。
+/// 完成通知防抖：最后一次完成后静默这么久才合并发一条。
 const NOTIFY_DEBOUNCE: Duration = Duration::from_millis(800);
 /// 持续密集完成时的最长合并等待。
 const NOTIFY_MAX_WAIT: Duration = Duration::from_secs(3);
@@ -348,7 +348,7 @@ async fn reconcile_awake(should_hold: bool, awake: &mut AwakeState) {
 }
 
 /// 下载完成通知开关；未写过偏好时默认开启——与设置页开关
-/// （`crates/settings/src/sections/notify.rs`）及 Flutter `SettingsProvider` 默认值一致，
+/// （`crates/settings/src/sections/notify.rs`）及 Web / 原生移动端设置目录的默认值一致，
 /// 否则开关显示为开、实际却不通知。
 const NOTIFY_ON_COMPLETE_PREF: &str = "download.notify_on_complete";
 const NOTIFY_ON_COMPLETE_DEFAULT: bool = true;

@@ -151,7 +151,7 @@ public enum HostMethod {
     public static let agentSyncSetLocalOnly = "agent.sync.setLocalOnly"
     /// FluxCloud 服务地址读取；正式构建 `editable=false`，地址恒为构建期固定值。
     public static let agentCloudEndpointGet = "agent.cloud.endpointGet"
-    /// 仅调试构建可用（对齐 Flutter `CloudApiConfig`）：覆盖/恢复 FluxCloud 服务地址，立即生效。
+    /// 仅调试构建可用：覆盖/恢复 FluxCloud 服务地址，立即生效。
     public static let agentCloudEndpointSet = "agent.cloud.endpointSet"
     public static let agentRemoteList = "agent.remote.list"
     public static let agentRemoteDispatch = "agent.remote.dispatch"

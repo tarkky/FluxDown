@@ -146,7 +146,7 @@ enum class WebhookEvent(val wire: String) {
     ;
 
     companion object {
-        /** 新端点默认订阅（与 Dart `WebhookEvents.defaults` 一致）。 */
+        /** 新端点默认订阅任务完成与失败事件。 */
         val defaultWires: List<String> = listOf(Completed.wire, Failed.wire)
     }
 }

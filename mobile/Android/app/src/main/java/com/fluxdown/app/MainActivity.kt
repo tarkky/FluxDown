@@ -9,7 +9,7 @@ import android.os.Bundle
  * （X / Via 等）还按 Flutter 版保存的组件名把下载 intent 显式发给它。
  *
  * 自身无界面（`Theme.NoDisplay`）：下载 intent（VIEW / SEND / SEND_MULTIPLE）转交透明的
- * [ExternalDownloadActivity]，其余转交主界面 [HomeActivity]，随即结束（同 Flutter 版路由）。
+ * [ExternalDownloadActivity]，其余转交主界面 [HomeActivity]，随即结束。
  */
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {

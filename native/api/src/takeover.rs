@@ -15,8 +15,8 @@ use fluxdown_protocol::daemon::DownloadRequest;
 /// - `{ "urls": ["u1","u2"], "saveDir": "", "referrer": "", "cookies": "", "headers": {} }`
 /// - `{ "items": [ { ...DownloadRequest }, ... ] }`（取各项 url，共享首个非空 saveDir/cookies/referrer）
 ///
-/// 统一合并为**单个** [`DownloadRequest`]，`url` 以换行符连接 —— 与 Dart 快速下载
-/// 弹框「按换行拆分批量创建」的既有约定一致，用户只需确认一次。
+/// 统一合并为**单个** [`DownloadRequest`]，`url` 以换行符连接 —— 与 GPUI/Web 新建下载框
+/// 「按换行拆分批量创建」的既有约定一致，用户只需确认一次。
 pub(crate) fn parse_batch(body: &[u8]) -> Result<DownloadRequest, String> {
     let v: Value = serde_json::from_slice(body).map_err(|e| format!("invalid JSON: {e}"))?;
 

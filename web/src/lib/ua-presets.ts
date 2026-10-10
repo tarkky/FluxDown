@@ -1,4 +1,4 @@
-// 预设 UA（与桌面端 lib/src/models/ua_presets.dart 保持同步）。
+// 预设 UA（与桌面端 crates/downloads/src/model/new_download.rs 保持同步）。
 // Chrome / Edge 遵循 UA Reduction 策略，次版本号固定为 0.0.0；
 // 版本基准：Chrome 145 / Edge 145 / Firefox 147 / Safari 18.3（2025-2026 主流版本）
 export const UA_PRESETS = [

@@ -1295,7 +1295,7 @@ async fn run_track_pair_inner(p: &DownloadParams, audio_url: &str) -> Result<i64
     p.db.update_task_total_bytes(&p.task_id, video_bytes + audio_bytes)
         .await?;
     // 终帧分布快照：把两轨合成为一个 100% 全覆盖段。音频轨走单流时不产生
-    // 分段快照，Dart 端缓存的最后一帧仍是视频轨阶段的（只覆盖 [0, 视频轨长)），
+    // 分段快照，宿主缓存的最后一帧仍是视频轨阶段的（只覆盖 [0, 视频轨长)），
     // 完成后分布图尾部会留灰——此帧以任务级坐标系覆盖全量，消除残留。
     let pair_actual = video_bytes + audio_bytes;
     if pair_actual > 0

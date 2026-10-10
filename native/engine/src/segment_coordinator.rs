@@ -816,7 +816,7 @@ type FreshSegments = (BTreeMap<i32, LiveSegment>, Vec<(i32, i64, i64)>);
 /// DB save interval — matches downloader.rs.
 const DB_SAVE_INTERVAL_SECS: u64 = 3;
 
-/// Progress report interval to Dart UI.
+/// Progress report interval to the client UI.
 const UI_REPORT_INTERVAL_MS: u128 = 200;
 
 /// Retry constants for segment downloads.
@@ -4453,7 +4453,7 @@ async fn persist_segment_change(
 }
 
 // ---------------------------------------------------------------------------
-// Helper: send split event to Dart
+// Helper: send split event to the host
 // ---------------------------------------------------------------------------
 
 /// Emit an `EngineEvent::SegmentSplit` so the host can animate the split.
@@ -5464,7 +5464,7 @@ async fn do_segment(
     }
 
     // 注：旧版本会在 segment 0 响应中提取 Content-Disposition 的"更好文件名"
-    // 写入 DB 并通知 Dart UI，run_download_inner 末尾再据此 dedup + 重定向
+    // 写入 DB 并通知客户端 UI，run_download_inner 末尾再据此 dedup + 重定向
     // dest_path。该机制已移除——新架构下文件名由 DownloadManager 在
     // do_start_task 同步段统一决策（probe 阶段读取 Content-Disposition），
     // 所有下载器内部不再变更文件名，避免与 manager 的 reserved_temp_paths

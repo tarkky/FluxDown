@@ -297,8 +297,8 @@ fn is_profile_config_key(key: &str) -> bool {
 /// config 键是否属于敏感的插件认证凭据或站点级 Basic Auth 命名空间。
 ///
 /// REST/RPC 只读接口须过滤该类键，写接口须整体拒绝（而非静默丢弃，见
-/// `fluxdown_server`/`hub` 的 `/api/v1/config` 与 aria2 兼容层）。单点定义，
-/// 判据与 [`is_profile_config_key`] 保持一致，供 `server`/`hub` 复用（L-2）。
+/// 兼容 API 的 `/api/v1/config` 与 aria2 层）。单点定义，
+/// 判据与 [`is_profile_config_key`] 保持一致，供各宿主复用。
 pub fn is_sensitive_config_key(key: &str) -> bool {
     key == AUTH_PROFILES_CONFIG_KEY
         || key == crate::site_auth::SITE_AUTH_CONFIG_KEY

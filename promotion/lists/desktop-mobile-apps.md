@@ -26,7 +26,7 @@
 - ⚠️ **GitHub 仓库 Homepage 字段目前填的是 `https://www.fluxdown.com`，与 README 不一致**。提交前务必统一，否则审核者点开会看到两个不同官网 → 见「跨清单前置项」。
 - 浏览器扩展**已上架三家商店**（Chrome Web Store / Edge Add-ons / Firefox AMO），扩展类清单可用。
 - Android：已发 per-ABI + universal APK（`com.fluxdown.app`），**未上架 F-Droid / IzzyOnDroid / Google Play**。
-- Android 端依赖已核查：`android/` 与 `pubspec.yaml` 中**无** Firebase / play-services / Crashlytics / 友盟 / Bugly 等专有 SDK → 满足 android-foss「无专有成分」要求。
+- Android 端已切换为原生 `mobile/Android` + `native/mobile`。旧 Flutter 工程的依赖核查不能证明当前原生依赖符合 android-foss「无专有成分」要求；投稿前须重新核查原生项目及其传递依赖。
 - Windows 包管理：已收录进 **ScoopInstaller/Extras**（`scoop install extras/fluxdown`，excavator 自动追新，自托管 bucket 已移除）；**无 winget、无 Homebrew Cask**。
 
 ---
@@ -319,7 +319,7 @@ DimitrisPa fork 的 README 顶部已自称 *"a continuation of the now archived 
 | `luongvo/awesome-macos` | **不存在** | 任务里点名要确认的仓库，GraphQL 解析失败，GitHub 搜索也无此仓库。疑为记错，实际应指 `luong-komorebi/Awesome-Linux-Software`（Linux，非 macOS）。 |
 | `pierrehedkvist/awesome-desktop-apps` | **不存在** | GraphQL 解析失败。GitHub 搜索 `awesome-desktop-apps` 无活跃同名清单。 |
 | `phmullins/awesome-macos` | **未核实** | 仓库存在（3.1k star），但 `master` 分支 raw README 返回 404，默认分支名未确认，未能读到章节排版。**若后续要做，需先确认默认分支。** |
-| `open-saas-directory/awesome-native-macosx-apps` | **不够格** | 准入条件明写「✅ 用 Swift/SwiftUI/AppKit/Objective-C 构建」「❌ 不收 Electron 或 web wrapper」「❌ 不收资源占用高的跨平台应用」。FluxDown 是 Flutter UI，属被排除的跨平台桌面应用，提了会被拒。 |
+| `open-saas-directory/awesome-native-macosx-apps` | **不够格** | 准入条件明写「✅ 用 Swift/SwiftUI/AppKit/Objective-C 构建」「❌ 不收 Electron 或 web wrapper」「❌ 不收资源占用高的跨平台应用」。FluxDown 桌面端是 Rust（GPUI）自绘的跨平台应用，不属于 Swift/AppKit 原生实现，仍不满足准入。 |
 | `herrbischoff/awesome-macos-command-line` | **已归档** | 且只收命令行工具。 |
 | `stefanbuck/awesome-browser-extensions-for-github` | **不够格** | 3.3k star 且活跃，但只收「用于 GitHub 网站的扩展」。FluxDown 扩展与 GitHub 无关。 |
 | `osintambition/Awesome-Browser-Extensions-for-OSINT` | **不够格** | 只收 OSINT 情报调查用途扩展。 |

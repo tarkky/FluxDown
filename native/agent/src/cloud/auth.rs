@@ -84,7 +84,7 @@ impl CloudAuthService {
         self.client.logout().await
     }
 
-    /// 与 Flutter `CloudClient._withDeviceInfo` 对齐：认证类请求体必须携带
+    /// FluxCloud 认证契约：认证类请求体必须携带
     /// `deviceId`（服务端必填，缺失 422）及 `deviceName` / `devicePlatform` / `appVersion`；
     /// 响应兼容两种形态——tagged（`/auth/login`：`{status, auth}` 或
     /// `{status: "deviceVerificationRequired", ttlSeconds, willReplaceDevices}`）

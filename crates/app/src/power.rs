@@ -171,7 +171,7 @@ fn clear_countdown(cx: &mut App) {
     }
 }
 
-/// `mm:ss`，与 agent 托盘 tooltip / Flutter `ShutdownService.remainingText` 一致。
+/// `mm:ss`，与 agent 托盘 tooltip 一致。
 fn format_remaining(remaining: Duration) -> String {
     let total = remaining.as_secs();
     format!("{:02}:{:02}", total / 60, total % 60)

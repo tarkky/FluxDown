@@ -366,8 +366,7 @@ pub(crate) struct TaskMenuFacts {
     pub(crate) boosted: bool,
     /// `url` 是否为 BT 哨兵值 `torrent-file://…`（不可重新下载）。
     pub(crate) is_torrent_sentinel: bool,
-    /// 失败态且错误消息带插件重试前缀（与
-    /// `lib/src/widgets/task_list_item.dart` 的 `_pluginErrorPrefix` 同源）。
+    /// 失败态且错误消息带插件重试前缀。
     pub(crate) is_plugin_retry_error: bool,
     /// 已完成但产物已不在下载目录（文件跟踪扫描结果）。
     pub(crate) file_missing: bool,
@@ -2318,7 +2317,7 @@ impl TableDelegate for DownloadTableDelegate {
         self.visible.len()
     }
 
-    /// 空态：图标 + 标题 + 引导（与 Flutter 桌面端同文案）。
+    /// 空态：图标 + 标题 + 引导。
     fn render_empty(
         &mut self,
         _window: &mut Window,

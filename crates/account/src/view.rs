@@ -23,10 +23,10 @@ use crate::pages;
 use crate::sync_scope::{SyncPhase, relative_time_changes_in, sync_phase};
 use crate::{AccountCommand, AccountPort, PortFuture};
 
-/// 顶部居中卡片列的最大宽度（与 Flutter `_AccountContent` 的 760 对齐）。
+/// 顶部居中卡片列的最大宽度。
 const CONTENT_MAX_WIDTH: f32 = 760.;
 
-/// 服务器地址设置只在调试构建出现（对齐 Flutter 的 `kDebugMode` 门控）；
+/// 服务器地址设置只在调试构建出现；
 /// 正式包既不显示也不向 agent 查询。
 const SERVER_ADDRESS_VISIBLE: bool = cfg!(debug_assertions);
 
@@ -282,7 +282,7 @@ impl AccountView {
         .detach();
     }
 
-    /// 手动刷新云端全量信息：资料/套餐/能力 + 设备名册（Flutter `_refreshCloudInfo`）。
+    /// 手动刷新云端全量信息：资料/套餐/能力 + 设备名册。
     /// 在途期间按钮转菊花并拒绝重入；完成后以 toast 告知成功/失败，
     /// 数据本身经会话/设备事件回流重渲染。
     pub(crate) fn refresh_cloud_info(&mut self, window: &mut Window, cx: &mut Context<Self>) {

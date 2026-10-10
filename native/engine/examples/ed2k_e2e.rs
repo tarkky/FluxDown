@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    // 注入 ed2k 运行配置（生产中由 hub 写入 DB config）。
+    // 注入 ed2k 运行配置（生产中由 daemon 写入 DB config）。
     engine.db.set_config("ed2k_server_list", SERVERS).await?;
     engine.db.set_config("ed2k_listen_port", "0").await?;
     engine.db.set_config("ed2k_enable_upnp", "false").await?;

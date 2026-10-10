@@ -15,7 +15,7 @@ import com.fluxdown.core.store.HostState
 
 /**
  * 外部唤起带来的一条下载请求：浏览器「外部下载器」（X / Via 等的 http(s) VIEW）、系统分享、`magnet:` / `ed2k://`
- * 链接、浏览器扩展的 `fluxdown://download` 协议。镜像 Flutter `SharedDownloadRequest`——Cookie / 来源页 /
+ * 链接、浏览器扩展的 `fluxdown://download` 协议。Cookie / 来源页 /
  * 请求头 / 建议文件名只属于 [url] 这一条链接。
  */
 data class ExternalDownload(
@@ -27,8 +27,8 @@ data class ExternalDownload(
 )
 
 /**
- * Intent 载荷 → [ExternalDownload]，语义同 Flutter `ExternalDownloadActivity.extractShared` + Dart
- * `ShareIntentService._parse`。只接收原始字符串（Android `Intent` 的读取在 `:app`）；超长输入按同一组上限截断，
+ * Intent 载荷 → [ExternalDownload]。只接收原始字符串（Android `Intent` 的读取在 `:app`）；
+ * 超长输入按同一组上限截断，
  * 避免卡死界面。
  */
 object ExternalIntake {
@@ -45,7 +45,7 @@ object ExternalIntake {
 
     private const val PROTOCOL_PREFIX = "fluxdown://"
 
-    /** 首个可下载链接：magnet / ed2k / http(s) / ftp（同 Dart `ShareIntentService._urlPattern`，空白含 Unicode 空格）。 */
+    /** 首个可下载链接：magnet / ed2k / http(s) / ftp（空白含 Unicode 空格）。 */
     private val urlPattern = Regex(
         """(magnet:\?[^\s\p{Z}\uFEFF]+|ed2k://[^\s\p{Z}\uFEFF]+|(?:https?|ftp)://[^\s\p{Z}\uFEFF]+)""",
         RegexOption.IGNORE_CASE,
@@ -131,7 +131,7 @@ object ExternalIntake {
 
 /**
  * 「免打扰下载」（偏好 `download.silent_download`）下外部请求直接建任务的参数，规则同 agent
- * `capture.rs::ExternalPolicy` 与 Flutter `_createSilentTask`：保存目录 = 分类目录 > 跟随上次保存位置 >
+ * `capture.rs::ExternalPolicy`：保存目录 = 分类目录 > 跟随上次保存位置 >
  * 主机默认目录；队列 / 分段取主机默认；[unattended] = 设备偏好 `download.silent_skip_selection`
  * （跳过 BT 文件 / 画质 / 变体二次选择）。
  */

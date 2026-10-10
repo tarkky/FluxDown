@@ -196,7 +196,7 @@ pub(crate) fn empty_state(
         .child(meta_text(cx).text_center().child(description))
 }
 
-/// 触发双列排布的最小内容宽度（与 Flutter `_AdaptiveSections` 一致）。
+/// 触发双列排布的最小内容宽度。
 pub(crate) const TWO_COLUMN_MIN_WIDTH: f32 = 920.;
 
 pub(crate) type Getter<T> = Rc<dyn Fn(&App) -> T>;
@@ -510,7 +510,7 @@ impl SettingsRow {
             .chain(self.keywords.iter())
     }
 
-    /// Flutter `_AdaptiveSections._weightOf` 的行权重。
+    /// 自适应分组排布的行权重。
     fn layout_weight(&self) -> f32 {
         self.weight.unwrap_or(if self.full.is_some() {
             3.0

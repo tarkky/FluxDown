@@ -1,4 +1,4 @@
-//! 全局 User-Agent：预设下拉 + 自定义输入，与 `lib/src/models/ua_presets.dart` 同基线。
+//! 全局 User-Agent：预设下拉 + 自定义输入。
 
 use std::rc::Rc;
 
@@ -20,7 +20,7 @@ use crate::ui::{
 
 pub(crate) const UA_KEY: &str = "global_user_agent";
 
-/// 预设 UA（key → UA 字符串）。版本基准与 Dart 侧一致。
+/// 预设 UA（key → UA 字符串），与下载表单及 Web 端保持同步。
 pub(crate) const UA_PRESETS: &[(&str, &str)] = &[
     (
         "chrome",

@@ -13,7 +13,7 @@ globs:
 规则：
 
 - **engine crate（`native/engine`）**：任何 `tokio::process::Command` 构造后、`.spawn()` / `.output()` 之前，必须先经 `crate::proc::no_console_window(&mut cmd)`（见 `native/engine/src/proc.rs`）。因此需要 `let mut cmd = Command::new(...)` 绑定，不能直接链式 `Command::new(...).args(...).output()`。
-- **hub / nmh / updater 等 App-shell crate**：沿用已有写法——`use std::os::windows::process::CommandExt;` + `.creation_flags(0x0800_0000)`（`CREATE_NO_WINDOW`），参考 `native/hub/src/reveal_file.rs` / `updater.rs`。
+- **agent / nmh 等 App-shell crate**：沿用已有写法——`use std::os::windows::process::CommandExt;` + `.creation_flags(0x0800_0000)`（`CREATE_NO_WINDOW`），复用所属 crate 的现有进程封装。
 - 该标志用 `#[cfg(target_os = "windows")]` 包裹；GUI 子系统程序不受影响，非 Windows 平台为空操作。
 
 例外（无需设标志）：

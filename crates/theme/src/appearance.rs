@@ -1,4 +1,4 @@
-//! 外观偏好：与 Flutter `theme_provider.dart` / `sync_catalog.dart` 同基线的
+//! 外观偏好：PC/Web 共享的
 //! 内置主题 ID、强调色方案、界面缩放，以及偏好快照的解析；另含桌面专属的字体 / 字号偏好。
 
 use std::collections::BTreeMap;
@@ -10,27 +10,27 @@ use serde_json::Value;
 
 use crate::ThemePreference;
 
-/// 云同步目录键：`ThemeMode.name`（`system` | `light` | `dark`）。
+/// 云同步目录键：主题模式（`system` | `light` | `dark`）。
 pub const THEME_MODE_KEY: &str = "appearance.theme_mode";
-/// 云同步目录键：`builtin:<BuiltinThemeId.name>` 或 `custom:<id>`（本机主题库中的导入主题）。
+/// 云同步目录键：`builtin:<wire_name>` 或 `custom:<id>`（本机主题库中的导入主题）。
 pub const DARK_THEME_KEY: &str = "appearance.dark_theme";
 /// 云同步目录键：同 [`DARK_THEME_KEY`]，亮色槽位。
 pub const LIGHT_THEME_KEY: &str = "appearance.light_theme";
-/// 云同步目录键：`AppColorScheme.name`（`blue` | `green` | `violet` | `rose` | `custom`）。
+/// 云同步目录键：强调色方案（`blue` | `green` | `violet` | `rose` | `custom`）。
 pub const COLOR_SCHEME_KEY: &str = "appearance.color_scheme";
-/// 云同步目录键：ARGB 整数（Flutter `Color.toARGB32()`）。
+/// 云同步目录键：ARGB 整数。
 pub const CUSTOM_COLOR_KEY: &str = "appearance.custom_color";
-/// 设备本地键：缩放倍率（`0.8` ~ `1.5`，Flutter `ThemeProvider.uiScale`）。
+/// 设备本地键：缩放倍率（`0.8` ~ `1.5`）。
 pub const UI_SCALE_KEY: &str = "ui_scale";
 
-/// Flutter `AppColorScheme.custom` 的初始颜色。
+/// 自定义强调色的初始颜色。
 pub const DEFAULT_CUSTOM_COLOR: u32 = 0xFF63_66F1;
-/// Flutter `_UiScaleSelector` 提供的缩放档位（百分比）。
+/// 界面缩放选择器提供的档位（百分比）。
 pub const UI_SCALE_PERCENTS: [u16; 7] = [80, 90, 100, 110, 120, 130, 150];
 const UI_SCALE_MIN: u16 = 80;
 const UI_SCALE_MAX: u16 = 150;
 
-/// 与 Flutter `BuiltinThemeId` 同名的内置主题；wire 名称即 Dart enum `.name`。
+/// 内置主题；wire 名称保持既有持久化格式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BuiltinThemeId {
@@ -42,7 +42,7 @@ pub enum BuiltinThemeId {
 }
 
 impl BuiltinThemeId {
-    /// 全部内置主题，顺序即 Flutter UI 显示顺序。
+    /// 全部内置主题，顺序即 UI 显示顺序。
     pub const ALL: [Self; 5] = [
         Self::DefaultDark,
         Self::DefaultLight,
@@ -51,7 +51,7 @@ impl BuiltinThemeId {
         Self::WarmLight,
     ];
 
-    /// Dart enum `.name`。
+    /// 持久化 wire 名称。
     #[must_use]
     pub fn wire_name(self) -> &'static str {
         match self {
@@ -76,7 +76,7 @@ impl BuiltinThemeId {
         format!("builtin:{}", self.wire_name())
     }
 
-    /// 主题本身的明暗外观（Flutter `BuiltinThemeEntry.appearance`）。
+    /// 主题本身的明暗外观。
     #[must_use]
     pub fn appearance(self) -> ThemeMode {
         match self {
@@ -106,7 +106,7 @@ impl BuiltinThemeId {
         }
     }
 
-    /// 指定明暗槽位可选的主题（Flutter 只展示与当前模式同外观的卡片）。
+    /// 指定明暗槽位可选的主题，仅展示与当前模式同外观的卡片。
     pub fn presets_for(mode: ThemeMode) -> impl Iterator<Item = Self> {
         Self::ALL
             .into_iter()
@@ -114,7 +114,7 @@ impl BuiltinThemeId {
     }
 }
 
-/// 与 Flutter `AppColorScheme` 同名的强调色方案。
+/// 强调色方案。
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AccentScheme {
@@ -127,7 +127,7 @@ pub enum AccentScheme {
 }
 
 impl AccentScheme {
-    /// 全部方案，顺序即 Flutter UI 显示顺序。
+    /// 全部方案，顺序即 UI 显示顺序。
     pub const ALL: [Self; 5] = [
         Self::Blue,
         Self::Green,
@@ -136,7 +136,7 @@ impl AccentScheme {
         Self::Custom,
     ];
 
-    /// Dart enum `.name`。
+    /// 持久化 wire 名称。
     #[must_use]
     pub fn wire_name(self) -> &'static str {
         match self {
@@ -167,7 +167,7 @@ impl AccentScheme {
         }
     }
 
-    /// 预设色（Flutter `previewColor`）；`Custom` 为其占位色。
+    /// 预设色；`Custom` 为其占位色。
     #[must_use]
     pub fn preset_argb(self) -> u32 {
         match self {
@@ -196,7 +196,7 @@ pub fn argb_color(argb: u32) -> Hsla {
     Hsla::from(rgb(argb & 0x00FF_FFFF))
 }
 
-/// 颜色 → 不透明 ARGB（Flutter `Color.toARGB32()`，alpha 固定 `FF`）。
+/// 颜色 → 不透明 ARGB（alpha 固定 `FF`）。
 #[must_use]
 pub fn color_argb(color: Hsla) -> u32 {
     let rgba = Rgba::from(color);
@@ -204,7 +204,7 @@ pub fn color_argb(color: Hsla) -> u32 {
     0xFF00_0000 | (channel(rgba.r) << 16) | (channel(rgba.g) << 8) | channel(rgba.b)
 }
 
-/// 把缩放百分比限制到 Flutter 允许范围（80 ~ 150）并按 10 取整。
+/// 把缩放百分比限制到允许范围（80 ~ 150）并按 10 取整。
 #[must_use]
 pub fn normalize_ui_scale_percent(percent: u16) -> u16 {
     let clamped = percent.clamp(UI_SCALE_MIN, UI_SCALE_MAX);
@@ -289,7 +289,7 @@ impl Default for AppearancePreferences {
 }
 
 impl AppearancePreferences {
-    /// 从偏好快照解析；缺失或非法的键回退到 Flutter 默认值。
+    /// 从偏好快照解析；缺失或非法的键回退到默认值。
     #[must_use]
     pub fn from_values(values: &BTreeMap<String, Value>) -> Self {
         let defaults = Self::default();
@@ -334,7 +334,7 @@ impl AppearancePreferences {
         f32::from(self.ui_scale_percent) / 100.
     }
 
-    /// 写入 [`UI_SCALE_KEY`] 的值（Flutter 存 `double`）。
+    /// 写入 [`UI_SCALE_KEY`] 的浮点缩放倍率。
     #[must_use]
     pub fn ui_scale_pref_value(&self) -> f64 {
         f64::from(self.ui_scale_percent) / 100.
@@ -431,7 +431,7 @@ pub fn parse_hex_argb(text: &str) -> Option<u32> {
     }
 }
 
-/// ARGB → `RRGGBB` 大写十六进制（Flutter 色盘输入框格式）。
+/// ARGB → `RRGGBB` 大写十六进制（色盘输入框格式）。
 #[must_use]
 pub fn rgb_hex(argb: u32) -> String {
     format!("{:06X}", argb & 0x00FF_FFFF)

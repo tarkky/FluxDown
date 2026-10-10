@@ -7,7 +7,7 @@
 //!
 //! Refresh triggers:
 //! - On startup, when the cache is older than [`REFRESH_INTERVAL_SECS`].
-//! - Manually, via the `UpdateTrackerSubscription` Dart signal.
+//! - Manually, via the `daemon.bt.trackerSubscription.refresh` daemon RPC.
 //! - When the subscription URL list changes in Settings.
 
 use std::collections::HashSet;

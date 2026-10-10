@@ -2,7 +2,6 @@
 description: FluxDown 多语言只以英文 + 简体中文为开发基线，其余语言由社区经 Weblate 完善，开发中不检查也不手改
 condition:
   - 'assets/i18n/*.json'
-  - 'lib/src/i18n/*.dart'
   - 'web/src/i18n/*'
   - 'website-v2/src/i18n/messages/*'
   - 'fluxDown/utils/locales/*'
@@ -15,7 +14,7 @@ interruptMode: never
 
 | 面 | 基线文件 | 备注 |
 |---|---|---|
-| App（Flutter 桌面+移动+popup）+ GPUI（`crates/*`）+ Web SPA（`web/`） | `assets/i18n/en.json` + `assets/i18n/zh.json` | 三端共用同一 camelCase 键：Flutter 另在 `lib/src/i18n/translations.dart` 加 `S` getter；GPUI `ctx.t("key")`；Web `useT()`（`web/src/i18n`，Vite 别名直引该目录）。删键前 `grep crates/ web/src lib/` |
+| GPUI（`crates/*`）+ Web SPA（`web/`）+ 原生 Android/iOS（`mobile/`） | `assets/i18n/en.json` + `assets/i18n/zh.json` | 四端共用同一 camelCase 键：GPUI `ctx.t("key")`；Web `useT()`；Android 构建期生成 `R.string`；iOS `L("key")`。删键前检查 `crates/`、`web/src/` 与 `mobile/` 的消费者 |
 | 官网（主站 `website-v2/`） | `website-v2/src/i18n/messages/<ns>.ts` | 每个模块用 `defineMessages({ en, zh })` 同时声明两语，zh 结构必须与 en 完全一致，缺键/多键 `astro check` 直接报错；只有 en + zh，无社区语言。`website/` 是 /v1 旧站存档，文案不再改 |
 | 浏览器扩展 | `fluxDown/utils/locales/zh-CN.ts` + `en.ts` | 反过来：`MessageKey` 类型由 **`zh-CN.ts`** 推导，`en.ts` 是 `Record<MessageKey, string>`，少一个键直接 tsc 报错 |
 
@@ -24,10 +23,10 @@ interruptMode: never
 ## 加/改一个 UI 字符串的完整动作
 
 1. `en.json` 与 `zh.json`（官网为同一 `defineMessages` 的 `en`/`zh` 两支；扩展为 `zh-CN.ts` + `en.ts`）**同名键、同时补上、都非空**。
-2. App 端再去 `translations.dart` 加对应 getter/方法（`_r('key')`，参数化用 `{name}` 占位）——该文件的成员签名是全部调用点的契约。
+2. 各端通过已有 i18n 查表/生成入口消费共享键，参数化文案使用 `{name}` 占位；不要建立平行翻译表。
 3. 删键同理两边一起删；改键名等于删旧加新。
 4. **不要碰社区语言文件**（Weblate 回写的 `ja` 等）：这些由 Weblate 同步，手写/机翻会与 Weblate 回写冲突。缺键在运行时按键级回退英文，不是 bug，也不是"未完成"。
-5. App/GPUI/Web SPA 新增一门语言不需要改代码：用 glob/AssetManifest 自动发现语言文件，落一个 `<lang>.json` 就会出现在语言选择器。官网 v2 的语言集固定在 `website-v2/src/i18n/config.ts::LANGS`（en + zh）。
+5. GPUI/Web SPA 自动发现共享语言文件；原生移动端语言打包范围以各自构建入口为准。官网 v2 的语言集固定在 `website-v2/src/i18n/config.ts::LANGS`（en + zh）。
 
 ## 自检（在 FluxDown 仓根执行）
 

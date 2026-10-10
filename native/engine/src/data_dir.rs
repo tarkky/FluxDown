@@ -15,7 +15,7 @@
 //! ### 便携模式检测（仅 Windows）
 //!
 //! exe 同目录下存在 `portable` 标记文件即视为便携模式。
-//! 与 `updater.rs` 和 Dart 侧 `isPortableMode()` 保持一致。
+//! 与 agent `runtime.rs::portable_data_dir` 及更新器 `update/install/detect.rs` 的判定保持一致。
 //!
 //! ### 便携数据迁移（≤ v0.2.x → v0.3+）
 //!
@@ -32,8 +32,8 @@
 use std::path::{Path, PathBuf};
 
 /// Marker file name — a zero-byte file placed next to the exe by the portable
-/// ZIP distribution.  Matches `updater::PORTABLE_MARKER` and the Dart-side
-/// `_portableMarker` constant.
+/// ZIP distribution.  Matches the agent's `portable` checks
+/// (`runtime.rs::portable_data_dir`, `update/install/detect.rs`).
 #[cfg(target_os = "windows")]
 const PORTABLE_MARKER: &str = "portable";
 
@@ -122,7 +122,7 @@ fn resolve_data_dir_inner() -> PathBuf {
 
     // Android: 应用内部存储 `/data/data/<package>/files/fluxdown`。
     // 包名 = 进程名（`/proc/self/cmdline` 首个 NUL 之前的内容）。
-    // 该目录无需任何存储权限即可读写，与 Dart 侧 `resolveDataDir()` 保持一致。
+    // 该目录无需任何存储权限即可读写，原生 Android 宿主同样使用 `filesDir/fluxdown`。
     #[cfg(target_os = "android")]
     {
         match android_package_name() {
@@ -147,7 +147,7 @@ fn resolve_data_dir_inner() -> PathBuf {
 /// Android：从 `/proc/self/cmdline` 读取当前进程名（= 应用包名）。
 /// 进程名可能带 `:subprocess` 后缀，取冒号前部分。
 ///
-/// 供宿主（hub）拼接应用专属外部目录等 Android 路径使用。
+/// 供原生移动端宿主拼接应用专属外部目录等 Android 路径使用。
 ///
 /// # Examples
 ///
@@ -198,7 +198,7 @@ const DB_SHM: &str = "flux_down.db-shm";
 const DB_MIGRATION_PENDING: &str = ".db_migration_pending";
 
 /// 独立迁移项（不含 DB 三件套——那组走 [`migrate_db_group`] 原子迁移）。
-// KEEP IN SYNC with lib/src/services/platform_utils.dart knownItems
+// 保留旧客户端数据目录的迁移名单，不能随 UI 工程移除而缩减。
 #[cfg(any(target_os = "windows", test))]
 const KNOWN_ITEMS: &[&str] = &[
     "settings.json",
@@ -213,9 +213,8 @@ const KNOWN_ITEMS: &[&str] = &[
 /// 触发旧版便携布局（≤ v0.2.x，数据散落 exe 根层）→ `portable_data/` 的
 /// 一次性迁移（`Once` 保证进程内至多执行一次）。
 ///
-/// GUI 路径下 Dart 侧 `migratePortableData` 先行执行（`LogService` 初始化
-/// 早于 `initializeRust`），故本函数通常为 no-op；其主要价值在 CLI
-/// （`native/cli`）与 headless server 等纯 Rust 入口路径。
+/// 由 [`resolve_data_dir`] 在 Windows 便携模式下调用，所有解析数据目录的宿主
+/// （daemon / CLI `--local` 等）都会触发；旧布局已迁移过时为 no-op。
 ///
 /// 失败处理：条目原地保留、写 stderr 并落盘
 /// `<new_dir>/migration_errors.log`（GUI 进程 stderr 不可见，且文件 logger

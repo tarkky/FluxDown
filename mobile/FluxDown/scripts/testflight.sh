@@ -12,10 +12,11 @@
 #                缺省则用登录钥匙串里已有的证书（本机）
 #   --group      上传后把构建加入的 TestFlight 组（可重复；含外部组时自动提交 Beta 审核）
 #   --whats-new  TestFlight「测试内容」
-#   --skip-core  跳过 build-core.sh --release（核心 xcframework 已是 release 构建时）
+#   --skip-core  跳过 build-core.sh --release（核心 xcframework 已是 release 构建时；须以同一 FLUXDOWN_APP_VERSION 构建）
 # 前置：钥匙串里有 Apple Distribution 证书与私钥（或传 --p12）；
 #       环境变量 APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_PATH（.p8）；
-#       可选 FLUXCLOUD_BASE_URL（编译期写入核心，见 build-core.sh）。
+#       可选 FLUXCLOUD_BASE_URL（编译期写入核心，见 build-core.sh）；FLUXDOWN_APP_VERSION 缺省取 --version，
+#       写入核心的协议握手 / 云端 / UA 版本（与 Android package.sh、桌面打包一致）。
 set -euo pipefail
 
 TEAM_ID="KD4N89AAF5"
@@ -98,7 +99,7 @@ if [ -n "$PROFILE" ]; then
 fi
 
 if [ "$SKIP_CORE" = 0 ]; then
-  "$SCRIPT_DIR/build-core.sh" --release
+  FLUXDOWN_APP_VERSION="${FLUXDOWN_APP_VERSION:-$VERSION}" "$SCRIPT_DIR/build-core.sh" --release
 fi
 
 rm -rf "$OUT"

@@ -6,7 +6,6 @@ condition:
   - '(//|///|/\*|#|<!--).*(对标|参考|借鉴|照抄|抄自)'
 globs:
   - native/**/*.rs
-  - lib/**/*.dart
   - web/src/**/*.{ts,tsx}
   - fluxDown/**/*.ts
 repeatMode: after-gap

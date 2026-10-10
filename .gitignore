@@ -25,36 +25,14 @@ CLAUDE.md
 # is commented out by default.
 #.vscode/
 
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
-.dart_tool/
-.flutter-plugins-dependencies
-.pub-cache/
-.pub/
+# Build and coverage output
 /build/
 /coverage/
-
-# Symbolication related
-app.*.symbols
-
-# Obfuscation related
-app.*.map.json
-
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
 
 # Rust related
 /.cargo/*
 !/.cargo/config.toml
 /target/
-
-# Generated signals
-/lib/src/bincode
-/lib/src/serde
-/lib/src/bindings
 
 # Windows reserved device names
 nul
@@ -91,9 +69,6 @@ website/.vercel/
 .agents/
 skills-lock.json
 
-# Test files
-test/batch_delete_scale_test.dart
-test/resume_all_test.dart
 website/fluxdown-website-latest.tar
 /docs/
 
@@ -110,17 +85,11 @@ scripts/notify_config.json
 scripts/.send_progress
 scripts/filter_repo_replacements.txt
 fluxDown/stats.html
-android/local.properties
-**/flutter/ephemeral/
-**/Flutter/ephemeral/
 website/.vscode/launch.json
 design/
 .promo/
 assets/screenshot/
 .zed/
-
-# FVM Version Cache
-.fvm/
 
 # Git worktrees
 .worktrees/

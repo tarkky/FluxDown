@@ -1,18 +1,18 @@
-//! 全局文件日志 — 与 Dart 端 LogService 写入同一目录/文件，按日期分文件。
+//! 全局文件日志 — 与同一数据目录的其他日志写入端写入同一目录/文件，按日期分文件。
 //!
 //! - 日志目录：由 `data_dir::resolve_data_dir()` 决定，加 `/logs` 后缀
 //!   - Linux: `~/.local/share/fluxdown/logs/`
 //!   - macOS: `~/Library/Application Support/fluxdown/logs/`
 //!   - Windows 便携版: `<exe_dir>/portable_data/logs/`
 //!   - Windows 安装版: `%LOCALAPPDATA%/FluxDown/logs/`
-//! - 文件名：`fluxdown_YYYY-MM-DD.log`，分卷为 `fluxdown_YYYY-MM-DD.N.log`（与 Dart 端完全一致）
+//! - 文件名：`fluxdown_YYYY-MM-DD.log`，分卷为 `fluxdown_YYYY-MM-DD.N.log`
 //! - 两端都以 append 模式写入，POSIX `O_APPEND` 保证单次 write 原子性
 //! - 启动时自动清理 7 天前的日志文件
 //! - `tracing` 事件统一补充级别、target、源码位置；错误带稳定 `error_id` 并立即刷盘
 //! - 进程 panic hook 与 `spawn_logged` 后台任务边界保证 panic/Err 不会静默丢失
 //! - `health()` 暴露初始化与持久化写入降级状态，供诊断页与 Web UI 展示
 //!
-//! ## 自动分割与清理（与 Dart 端 log_service.dart 协议一致）
+//! ## 自动分割与清理
 //! - 单文件超过 2MB 自动分割到 `fluxdown_YYYY-MM-DD.N.log` 分卷；
 //! - 日志总大小超过上限（默认 10MB，可通过 `set_max_total_bytes` 由设置覆盖）时
 //!   按（日期, 分卷序号）从最旧开始删除；
@@ -212,7 +212,7 @@ impl AppLogger {
     }
 
     /// 找到 `date_tag` 当天已有的最大分卷序号；若该分卷已写满则返回下一个序号。
-    /// Dart 端可能已创建更高序号的分卷，两端通过该扫描收敛到同一文件。
+    /// 其他写入端可能已创建更高序号的分卷，通过该扫描收敛到同一文件。
     fn scan_active_part(&self, date_tag: &str) -> u32 {
         let mut max_part: Option<u32> = None;
         if let Ok(entries) = fs::read_dir(&self.log_dir) {
@@ -242,10 +242,9 @@ impl AppLogger {
     /// 每次写入后按**真实文件长度**决定是否分割，超限则切换到新分卷并触发
     /// 总量清理。
     ///
-    /// 必须每次都 stat，不能靠自身写入量累加：Dart 端（lib/src/services/
-    /// log_service.dart）写同一个文件且写入量远大于本端，自身计数必然低估 ——
-    /// 那会导致 Dart 已经滚到新分卷、本端还在往写满的旧分卷里追加，两端
-    /// 时间线被拆散（本端写入频率低，一次 fstat 的开销可忽略）。
+    /// 必须每次都 stat，不能靠自身写入量累加：其他日志写入端可能写同一个
+    /// 文件，自身计数会低估分卷大小，导致不同写入端的时间线被拆散。
+    /// 本端写入频率低，一次 fstat 的开销可忽略。
     fn maybe_roll_by_size(&self, state: &mut LogState) -> io::Result<()> {
         if let Some(ref file) = state.file {
             state.size = file.metadata()?.len();
@@ -471,8 +470,8 @@ pub(crate) fn panic_hook_installed() -> bool {
 
 /// 初始化全局日志与 `tracing` subscriber。必须在启动任何后台任务前调用。
 ///
-/// 同进程二次 isolate（Android Activity 重建 / rinf 热重启）再调一次是
-/// 成功：subscriber 与文件 logger 是进程级一次性资源，已装好则直接返回。
+/// 同进程再次初始化也会成功：subscriber 与文件 logger 是进程级一次性
+/// 资源，已装好则直接返回。
 pub fn init() -> Result<(), LoggerInitError> {
     let data_dir =
         crate::data_dir::resolve_data_dir(None).map_err(LoggerInitError::ResolveDataDirectory)?;
@@ -829,8 +828,8 @@ pub fn sanitize_log_bytes(data: &[u8]) -> Vec<u8> {
 }
 
 /// 将日志目录下全部日志文件脱敏后打包为 zip 字节（deflate 压缩），供
-/// headless server 的「导出日志」下载端点使用。桌面端另有 Dart 侧
-/// `LogService.exportLogs`，两端应用相同类别的凭证、URL 与用户路径规则。
+/// headless server 的「导出日志」下载端点使用。脱敏规则与 agent 导出共用
+/// `fluxdown_logfile::SANITIZE_PATTERNS`。
 ///
 /// 需 `components` 或 `plugins` feature（`zip` 依赖随之启用）；导出瞬间被
 /// 清理的单个文件会被跳过，不使整个导出失败。
@@ -861,7 +860,7 @@ fn export_logs_zip_from(dir: &std::path::Path) -> Result<Vec<u8>, String> {
 }
 
 // ══════════════════════════════════════════════════
-//  路径解析 — 委托 data_dir 模块，与 Dart 端 platform_utils 一致
+//  路径解析 — 委托 data_dir 模块
 // ══════════════════════════════════════════════════
 
 fn resolve_log_dir() -> PathBuf {
@@ -878,12 +877,11 @@ fn resolve_log_dir() -> PathBuf {
 }
 
 // ══════════════════════════════════════════════════
-//  宏 — 直接替换 rinf::debug_print!
+//  日志宏
 //
 //  `#[macro_export]` 把宏放到 crate 根路径(`fluxdown_engine::log_info!`),
-//  下方 `pub use` 把它们重新导出回 `logger` 模块路径,使得
-//  `fluxdown_engine::logger::log_info!` 与 hub 侧历史用法
-//  `crate::logger::log_info!`(经 hub 的 `pub use` shim 转发)保持一致。
+//  下方 `pub use` 把它们重新导出回 `logger` 模块路径，支持
+//  `fluxdown_engine::logger::log_info!` 的模块限定调用。
 //  宏体内必须用 `$crate` 而非 `crate`——`crate::` 在 `macro_rules!` 里按
 //  *调用点* 所在 crate 解析,只有 `$crate` 才会不论调用点在哪个 crate,
 //  始终指回定义宏的 `fluxdown_engine`。

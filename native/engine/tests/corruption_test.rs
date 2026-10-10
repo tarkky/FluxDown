@@ -9,7 +9,7 @@
 //!     SetFileInformationByHandle / 拆分协调 / cancel_token / etc.
 //!
 //! 用法：
-//!   cargo test -p hub --release --lib corruption_test \
+//!   cargo test -p fluxdown_engine --release --test corruption_test \
 //!       -- --ignored --nocapture --test-threads=1
 //!
 //! 默认 `#[ignore]`，需要网络才能跑。

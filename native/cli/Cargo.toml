@@ -23,7 +23,7 @@ serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "sync", "signal"] }
 toml = "1.1.2"
 
-# TLS 后端按平台区分（对齐 engine/hub）：Windows 用系统 Schannel（native-tls），
+# TLS 后端按平台区分（对齐 engine）：Windows 用系统 Schannel（native-tls），
 # 其余平台用 rustls，避免 musl 静态交叉编译时找不到系统 OpenSSL
 [target.'cfg(windows)'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "charset", "native-tls"] }

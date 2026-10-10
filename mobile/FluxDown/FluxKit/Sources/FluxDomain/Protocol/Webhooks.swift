@@ -196,7 +196,7 @@ public enum WebhookEvent: CaseIterable, Sendable, Hashable {
         }
     }
 
-    /// 新端点默认订阅（与 Dart `WebhookEvents.defaults` 一致）。
+    /// 新端点默认订阅任务完成与失败事件。
     public static let defaultWires: [String] = [WebhookEvent.completed.wire, WebhookEvent.failed.wire]
 }
 

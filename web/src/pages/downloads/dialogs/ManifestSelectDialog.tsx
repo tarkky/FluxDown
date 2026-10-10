@@ -1,6 +1,6 @@
 // 多文件清单选择 → 建任务组（`daemon.group.create`）。
 // 由新建下载在单条 http(s) 链接经 `daemon.group.resolvePreview` 命中插件清单后打开（嵌套对话框，
-// 取消回到表单，确认建组后由调用方关闭表单）。交互沿用旧 web / Flutter 的下钻导航范式：
+// 取消回到表单，确认建组后由调用方关闭表单）。交互采用下钻导航：
 // 面包屑 + 目录行下钻 + 三态勾选 + 扩展名 chips + 全局搜索；resolverItem 恒为 item.id。
 
 import { ArrowLeft, ChevronRight, File as FileIcon, Folder, Home, MoreHorizontal } from 'lucide-react'

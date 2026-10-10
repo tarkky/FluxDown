@@ -1,9 +1,8 @@
 //! 集成测试：真实 TCP 连接 + `serve_on` + [`MockHost`]，黑盒验证 axum 服务器的
 //! HTTP + WS 契约（路由、鉴权、子开关、JSON-RPC 兼容层、aria2 WS 通知）。
 //!
-//! 覆盖语义迁移自旧 `native/hub/src/http_takeover.rs` 测试套件（见
-//! `git show HEAD:native/hub/src/http_takeover.rs`），改为对新
-//! `fluxdown_api`（axum 0.8 + [`ApiHost`] 抽象）的端到端验证：不再手写 HTTP 解析，
+//! 覆盖 HTTP 接管兼容语义，对 `fluxdown_api`（axum 0.8 + [`ApiHost`] 抽象）
+//! 做端到端验证：不再手写 HTTP 解析，
 //! 而是用最小的原始 TCP 客户端发真实请求、按 `Content-Length` 精确读取响应体
 //! （不依赖 `Connection: close`，与 keep-alive 无关，杜绝读取挂死）。WS 部分用
 //! 真实 `tokio-tungstenite` 客户端握手 + 收发帧，同样是黑盒端到端验证。

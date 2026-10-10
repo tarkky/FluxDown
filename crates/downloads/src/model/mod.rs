@@ -63,7 +63,7 @@ impl DownloadStatusFilter {
         match self {
             Self::All => true,
             Self::Completed => state == TaskState::Completed,
-            // 与 Flutter `StatusTab.downloading` 同义：下载中 + 等待中。
+            // 下载中筛选包含下载中与等待中的任务。
             Self::Incomplete => matches!(state, TaskState::Downloading | TaskState::Pending),
             Self::Failed => state == TaskState::Failed,
             Self::Paused => state == TaskState::Paused,

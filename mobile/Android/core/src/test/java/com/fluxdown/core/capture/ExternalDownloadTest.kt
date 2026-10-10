@@ -16,7 +16,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** 外部唤起载荷解析（同 Flutter `ExternalDownloadActivity` + Dart `ShareIntentService`）与免打扰建任务计划。 */
+/** 外部唤起载荷解析与免打扰建任务计划。 */
 class ExternalDownloadTest {
     // ── 浏览器「外部下载器」VIEW ──
 
@@ -50,7 +50,7 @@ class ExternalDownloadTest {
             "&filename=" + enc(" 名字.zip ") + "&cookies=" + enc("k=v; q=+") +
             "&referrer=" + enc(" https://x.test/ ") + "&headers=" + enc(headers) + "&url=https://ignored.test/"
         val d = ExternalIntake.fromView(data)!!
-        // 链接从参数里提取首个 URL（空白截断，同 Dart extractUrl）。
+        // 链接从参数里提取首个 URL，遇空白截断。
         assertEquals("https://x.test/a", d.url)
         assertEquals("名字.zip", d.fileName)
         assertEquals("k=v; q=+", d.cookies)

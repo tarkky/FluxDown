@@ -1,10 +1,7 @@
-//! 引擎向宿主(hub/CLI/Server/...)上报的事件,以及事件接收端 trait。
+//! 引擎向宿主（daemon、CLI、原生移动端等）上报的事件，以及事件接收端 trait。
 //!
-//! 每个 [`EngineEvent`] 变体的字段与 `hub::signals` 中对应的现有信号结构体
-//! 逐字段对应(字段顺序以 `hub/src/signals/mod.rs` 当前定义为准;引擎侧
-//! 可多出信号不需要的字段,如 `TaskProgress::upload_speed_bps`,由宿主
-//! 自行消费)。`hub` 侧的 `RinfEventSink` 实现把每个变体 match 回具体
-//! 信号类型并调用 `.send_signal_to_dart()`。
+//! 宿主实现 [`EventSink`]，将事件映射为自己的协议通知或本地状态更新；
+//! 引擎事件不依赖 UI、FFI 或具体传输协议。
 
 use crate::model::{
     GroupInfo, ManifestItemInfo, QueueInfo, QueuePosition, SegmentDetail, TaskInfo,
@@ -24,7 +21,7 @@ pub enum EngineEvent {
 
     /// 仅在任务活动已成功写入持久日志之后广播。
     TaskActivityAdded(crate::task_activity::TaskActivity),
-    /// 任务进度更新,下载过程中周期性发送。对应 `hub::signals::TaskProgress`。
+    /// 任务进度更新，下载过程中周期性发送。
     TaskProgress {
         task_id: String,
         /// 0=pending, 1=downloading, 2=paused, 3=completed, 4=error, 5=preparing
@@ -39,7 +36,7 @@ pub enum EngineEvent {
         /// 无错误时为空
         error_message: String,
         /// 实时上传速率(字节/秒)。仅 BT 任务非零,其余协议恒 0。
-        /// 不进 Dart 信号,由宿主写入 aria2 兼容层的实时速率表
+        /// 不进 daemon 事件流,由宿主写入 aria2 兼容层的实时速率表
         /// (`ApiHost::live_speeds` 的 `upload_bps`)。
         upload_speed_bps: i64,
         /// 已上传字节数（BT 做种）。仅 BT 任务有意义，默认 0。
@@ -57,13 +54,13 @@ pub enum EngineEvent {
     /// BT 任务数据下载完成(piece 全部下完),但校验与 staging→save_dir
     /// 搬移尚未完成、任务未进终态。每个任务至多发送一次
     /// (`progress_reporter` 按 task_id 去重)。对应 aria2 的
-    /// `onBtDownloadComplete` 通知语义,无对应 Dart 信号。
+    /// `onBtDownloadComplete` 通知语义,无对应客户端事件。
     BtDataFinished { task_id: String },
 
-    /// 响应"请求全部任务" — 全部持久化任务快照。对应 `hub::signals::AllTasks`。
+    /// 响应“请求全部任务”——全部持久化任务快照。
     TasksSnapshot(Vec<TaskInfo>),
 
-    /// 分段级进度,用于下载可视化(IDM 风格)。对应 `hub::signals::SegmentProgress`。
+    /// 分段级进度，用于下载可视化（IDM 风格）。
     SegmentProgress {
         task_id: String,
         total_bytes: i64,
@@ -72,7 +69,7 @@ pub enum EngineEvent {
         segments: Vec<SegmentDetail>,
     },
 
-    /// 队列任务探测到元数据。对应 `hub::signals::TaskMetaProbed`。
+    /// 队列任务探测到元数据。
     TaskMetaProbed {
         task_id: String,
         /// 空 = 无法探测
@@ -81,23 +78,21 @@ pub enum EngineEvent {
         total_bytes: i64,
     },
 
-    /// 队列位置批量更新 — 每次队列变化时广播。对应 `hub::signals::QueuePositionsUpdate`。
+    /// 队列位置批量更新——每次队列变化时广播。
     QueuePositionsChanged(Vec<QueuePosition>),
 
-    /// 全部命名队列 — 启动时与任意队列变化后发送。对应 `hub::signals::AllQueues`。
+    /// 全部命名队列——启动时与任意队列变化后发送。
     QueuesChanged(Vec<QueueInfo>),
     /// 单任务队列归属变化 —— `move_task_to_queue` 成功后发送，客户端据此
     /// 原位更新该任务的 `queue_id`，避免重发整表任务快照导致 UI 闪烁。
-    /// hub → `TaskQueueChanged` 信号；server → WS `taskQueueChanged`。
     TaskQueueChanged { task_id: String, queue_id: String },
 
     /// `ProxyMode::Auto` 任务的链路决策落定/变更——启动基线（direct /
     /// proxy:cached）与运行中主导路径变化（proxy:sampled 等）都会发送，客户端
     /// 据此原位刷新详情面板「链路」行。wire 标签见 `crate::auto_proxy::route`。
-    /// hub → `TaskRouteChanged` 信号；server → WS `taskRouteChanged`。
     TaskRouteChanged { task_id: String, route: String },
 
-    /// Boost 模式的优先下载任务发生变化。对应 `hub::signals::PriorityTaskChanged`。
+    /// Boost 模式的优先下载任务发生变化。
     PriorityTaskChanged {
         /// 当前优先任务 ID。空字符串 = Boost 模式未激活。
         priority_task_id: String,
@@ -106,7 +101,6 @@ pub enum EngineEvent {
     },
 
     /// 动态分段拆分发生通知(IDM 风格协调器),实时发送以便 UI 播放拆分动画。
-    /// 对应 `hub::signals::SegmentSplitEvent`。
     SegmentSplit {
         task_id: String,
         /// 被缩小的父分段索引。
@@ -127,11 +121,11 @@ pub enum EngineEvent {
 
     /// 文件跟踪：一批已完成任务的「文件已丢失」标志发生变化（true=丢失，
     /// false=恢复存在）。仅携带发生变化的任务 `(task_id, missing)`，避免重发
-    /// 整表快照导致活跃下载 UI 闪烁。对应 `hub::signals::FileMissingChanged`。
+    /// 整表快照导致活跃下载 UI 闪烁。
     FileMissingChanged(Vec<(String, bool)>),
 
     /// 插件因连续超时/超内存被自动熔断禁用。宿主据此提示用户
-    /// （hub → `PluginAutoDisabledNotice` 信号；server → WS `pluginAutoDisabled`）。
+    /// （兼容 WebSocket 事件为 `pluginAutoDisabled`）。
     /// 仅 `plugins` feature 下由 `PluginManager` 发出。
     PluginAutoDisabled {
         identity: String,
@@ -141,8 +135,7 @@ pub enum EngineEvent {
 
     /// BT 重复添加检测：新任务的 info-hash 已被另一任务持有（下载或做种），
     /// 引擎已删除新建的占位任务行（不产生失败任务）。宿主据此提示用户并
-    /// 可跳转已有任务（hub → `DuplicateTorrentNotice` 信号；server → WS
-    /// `duplicateTorrent`）。
+    /// 可跳转已有任务（兼容 WebSocket 事件为 `duplicateTorrent`）。
     DuplicateTorrentDetected {
         /// 被删除的占位任务 id。
         task_id: String,
@@ -156,7 +149,7 @@ pub enum EngineEvent {
     /// 开始（`running=true`）/结束（`running=false`）。**纯旁路 UI 提示，不影响
     /// 任务状态机**（通知平面 fire-and-forget 契约不变）；宿主 UI 应自设看门狗
     /// （钩子墙钟硬顶 1830s）防结束事件丢失导致指示器悬挂。
-    /// hub → `PluginHookActivityEvent` 信号；server → WS `pluginHookActivity`。
+    /// 兼容 WebSocket 事件为 `pluginHookActivity`。
     /// 仅 `plugins` feature 下由 `PluginManager` 发出。
     PluginHookActivity {
         task_id: String,
@@ -164,15 +157,14 @@ pub enum EngineEvent {
         running: bool,
     },
 
-    /// 全部任务组快照——组建/删除/改名/回收(GC)后发送。对应
-    /// `hub::signals::AllGroups`；server → WS `groupsChanged`。组**进度**不在此列
+    /// 全部任务组快照——组建/删除/改名/回收（GC）后发送。兼容 WebSocket
+    /// 事件为 `groupsChanged`。组**进度**不在此列
     /// （仍由宿主按 `group_id` 对 `TaskProgress` 做 SUM 聚合，引擎不发组级进度）。
     GroupsChanged(Vec<GroupInfo>),
 
     /// 前置预解析（多文件清单）结果，只读、不建任务、不写库。`items` 为空且
     /// `error` 为空 = 插件未返回清单（宿主应回退普通单任务创建）；`error` 非空 =
-    /// 预解析失败（同样回退普通创建，`error` 供 UI 提示）。对应
-    /// `hub::signals::ResolvePreviewResult`。仅 `plugins` feature 下由
+    /// 预解析失败（同样回退普通创建，`error` 供 UI 提示）。仅 `plugins` feature 下由
     /// [`crate::download_manager::DownloadManager::begin_resolve_preview`] 发出
     /// （feature 关时该方法直接发出空清单，无需宿主 `cfg` 分叉）。
     ResolvePreviewReady {
@@ -185,7 +177,7 @@ pub enum EngineEvent {
     },
 
     /// 多 CDN 并发下载 / 多网卡聚合的节点级活动事件（任务详情「日志」Tab 的
-    /// 可观测性）。对应 `hub::signals::TaskCdnEvent`；server → WS `taskCdnEvent`。
+    /// 可观测性）。兼容 WebSocket 事件为 `taskCdnEvent`。
     /// 仅多节点聚合或多网卡聚合被尝试/生效的任务发出；单节点池路径零事件。
     TaskCdnEvent {
         task_id: String,
@@ -227,12 +219,12 @@ pub enum EngineEvent {
 
     /// 全部 RSS 订阅快照——增删改 / 抓取完成 / 条目状态变化后发送（含派生的
     /// 未读计数，侧边栏 badge 与订阅列表同批更新）。
-    /// hub → `AllRssSources` 信号；server → WS `rssSourcesChanged`。
+    /// daemon（`event_hub.rs`）→ `DaemonEvent`/`WsServerMsg::RssSourcesChanged`。
     RssSourcesChanged(Vec<RssSourceInfo>),
 
     /// 某订阅的条目流快照——**只在该源确有变化或客户端显式请求时**发送
     /// （定时 tick 抓到 0 条新条目时静默，不打扰 UI）。
-    /// hub → `RssItemsSnapshot` 信号；server → WS `rssItemsChanged`。
+    /// daemon（`event_hub.rs`）→ `DaemonEvent`/`WsServerMsg::RssItemsChanged`。
     RssItemsChanged {
         source_id: String,
         /// 该源的条目流（新→旧，上限 `rss::MAX_ITEMS_PER_SOURCE`）。
@@ -243,7 +235,7 @@ pub enum EngineEvent {
     },
 
     /// 新建订阅向导的 feed 验证结果（只读，不落库不建任务）。
-    /// hub → `RssValidateResult` 信号；server → WS `rssFeedValidated`。
+    /// daemon（`event_hub.rs`）→ `DaemonEvent`/`WsServerMsg::RssFeedValidated`。
     RssFeedValidated {
         /// 与请求一一对应，用于把结果配回发起的对话框。
         request_id: String,
@@ -266,7 +258,7 @@ pub enum EngineEvent {
     /// `webhook::MAX_DELIVERY_LOG` 条，整仓一份实测 0.94MB，每 500ms 推一次
     /// 撑不住。宿主按 `deliveryId` 合并进自己那份列表，完整历史走「打开面板
     /// 时拉一次」。dispatcher 侧已按 500ms 节流 + 尾随补发。
-    /// hub → `WebhookDeliveriesDelta` 信号；server → WS `webhookDeliveriesChanged`。
+    /// daemon（`event_hub.rs`）→ `DaemonEvent`/`WsServerMsg::WebhookDeliveriesChanged`。
     WebhookDeliveriesChanged(Vec<crate::webhook::WebhookDelivery>),
 
     /// 「等待自动重试」的任务数变化——自动重试 / 备用链路切换 / 插件 `requestRetry`
@@ -279,7 +271,7 @@ pub enum EngineEvent {
     ///
     /// 每个触发点在 `webhook.emit` 之外再发一条，携带新生成的 `deliveryId`
     /// 与毫秒时间戳；daemon 映射为 `DaemonEvent::TaskNotice`，只由 agent 消费，
-    /// 不转发给任何 UI。hub 等不关心的宿主直接忽略。
+    /// 不转发给任何 UI。不关心的宿主直接忽略。
     TaskNotice(crate::webhook::TaskNotice),
 }
 
@@ -292,7 +284,7 @@ pub enum EngineEvent {
 /// async trait 会强迫所有调用点新增 `.await` 却无对应行为收益。
 ///
 /// 实现**不得**执行阻塞操作或长时间持锁;任何异步/耗时工作必须由实现
-/// 自行 `spawn`,不得让调用方等待 —— 因为 `hub` 侧的调用方运行在单线程
+/// 自行 `spawn`,不得让调用方等待 —— 因为宿主 actor 的调用方运行在单线程
 /// `current_thread` runtime 上,`emit` 内部阻塞会 stall 整个 runtime 上的
 /// 所有任务。
 pub trait EventSink: Send + Sync {

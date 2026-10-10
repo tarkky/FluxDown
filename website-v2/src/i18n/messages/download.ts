@@ -100,7 +100,7 @@ export const download = defineMessages({
     },
     android: {
       title: "Android",
-      desc: "APK builds per CPU ABI. Not sure which one? Take the universal build.",
+      desc: "APK builds per CPU ABI. Not sure which one? Take the universal build. Upgrading from the old Flutter-based app: the new app is signed with a new certificate, so uninstall the old one first (this clears its local data).",
       universal: "Universal",
     },
     ext: {
@@ -254,7 +254,7 @@ export const download = defineMessages({
     },
     android: {
       title: "Android",
-      desc: "按 CPU 架构分别提供 APK。不确定选哪个?下载通用版即可。",
+      desc: "按 CPU 架构分别提供 APK。不确定选哪个?下载通用版即可。从旧版(Flutter 版)升级:新版换用了新的签名证书,需先卸载旧版再安装(会清除旧版本地数据)。",
       universal: "通用版",
     },
     ext: {

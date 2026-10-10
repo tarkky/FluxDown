@@ -1,7 +1,7 @@
 //! RSS 订阅的引擎侧领域类型。
 //!
-//! 与 [`crate::model`] 同惯例：纯数据、无 serde/rinf derive——宿主各自用
-//! `From` 转换成自己的 wire DTO（hub 的 `SignalPiece` / api 的 `ToSchema`）。
+//! 与 [`crate::model`] 同惯例：纯数据、不绑定序列化协议；
+//! 宿主各自用 `From` 转换成自己的 wire DTO。
 
 /// 条目在订阅流中的状态。
 ///

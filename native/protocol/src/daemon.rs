@@ -1776,7 +1776,7 @@ pub enum WsServerMsg {
     },
     /// 入站配对请求待本机用户核验（本机作为响应方收到远端 hello+配对码后，
     /// 等待管理员核对 SAS 并调用管理面 `POST /api/v1/link/pair/approve`）。
-    /// 字段名与桌面端 rinf `LinkEvent{kind:"incomingPairing"}` 信号保持一致。
+    /// 字段名保持历史 `incomingPairing` 事件兼容。
     LinkIncomingPairing {
         session_id: String,
         sas: String,

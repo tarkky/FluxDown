@@ -33,7 +33,7 @@ use crate::proxy_config::{ProxyConfig, ProxyMode, detect_system_proxy};
 
 // ---------------------------------------------------------------------------
 // 路由标签（wire 契约：DB `tasks.auto_route`、TaskRouteChanged 事件、
-// api TaskDto.autoRoute、hub 信号与 Web WS 逐字一致）
+// api TaskDto.autoRoute 与 Web WS 逐字一致）
 // ---------------------------------------------------------------------------
 
 /// `tasks.auto_route` 的 wire 标签。空串 = 非 Auto 模式（或任务尚未启动过）。

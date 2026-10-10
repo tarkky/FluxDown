@@ -180,8 +180,8 @@ internal class NewDownloadState(
     }
 
     /**
-     * 外部唤起（浏览器外部下载器 / 分享 / 协议链接）带来的请求上下文，按链接归属（同 Flutter
-     * `_requests`）：首条（[primaryUrl]）预填进面板，随面板提交；之后追加的链接沿用各自的
+     * 外部唤起（浏览器外部下载器 / 分享 / 协议链接）带来的请求上下文，按链接归属：
+     * 首条（[primaryUrl]）预填进面板，随面板提交；之后追加的链接沿用各自的
      * Cookie / 来源页 / 请求头，面板对应项不覆盖它们。
      */
     private val external = HashMap<String, ExternalDownload>()

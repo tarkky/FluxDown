@@ -305,7 +305,7 @@ fn register_windows_aumid(icon: Option<&Path>) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 下载完成通知文案（与 Flutter `NotificationService._showSystemBatch` 同规则）：单个任务
+/// 下载完成通知文案：单个任务
 /// 标题「下载完成」、正文文件名；多个任务标题「N 个任务下载完成」、正文「最后一个文件名
 /// 等 N-1 个文件」。`text(key, count)` 按 en / zh 基线键取文案并替换 `{count}`。
 pub fn completion_text(
@@ -323,7 +323,7 @@ pub fn completion_text(
     ))
 }
 
-/// RSS 自动下载通知文案（同 Flutter 首页 toast）：标题「RSS 自动新建了 N 个下载任务」，
+/// RSS 自动下载通知文案：标题「RSS 自动新建了 N 个下载任务」，
 /// 正文为首个条目标题。
 pub fn rss_auto_download_text(
     titles: &[String],

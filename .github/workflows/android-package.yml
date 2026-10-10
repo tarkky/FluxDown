@@ -1,11 +1,11 @@
 # 原生 Android App（mobile/Android，applicationId com.fluxdown.app）→ release 签名 APK（universal + 各 ABI）。
 # 流程与本机一致，全部在 mobile/Android/scripts/package.sh：
 #   cargo-ndk 交叉编译 fluxdown_mobile（release）→ :app:assembleRelease（ABI 拆包 + universal）→ apksigner 校验。
-# 只出 artifact，不发 Release、不随 v* tag 触发：正式发布的 Android 仍是 Flutter 版（release.yml build-android）。
+# 只出 artifact，不发 Release、不随 v* tag 触发；release.yml 共用 package.sh 与同一套原生签名发布正式 APK。
 # 触发：
 #   - 手动：gh workflow run android-package.yml --ref main -f version=X.Y.Z[-后缀]
 #   - 被 test-package.yml（target=android-native / all）以 workflow_call 复用，可指定构建 ref。
-# 签名用原生版自己的密钥（与 Flutter 版的 ANDROID_KEYSTORE_BASE64 不是同一把，两者不能互相覆盖安装）。
+# 签名用 ANDROID_NATIVE_*，与旧 Flutter APK 的密钥不同，不能互相覆盖安装；缺少签名配置即失败。
 # Secrets：ANDROID_NATIVE_KEYSTORE_BASE64 / ANDROID_NATIVE_KEYSTORE_PASSWORD / ANDROID_NATIVE_KEY_ALIAS /
 #          ANDROID_NATIVE_KEY_PASSWORD / FLUXCLOUD_BASE_URL（可选）。凭据说明见 .omp/knowledge/ops.md「原生 Android 打包」。
 name: Android Native Package

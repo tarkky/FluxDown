@@ -68,7 +68,7 @@ split-debuginfo = "unpacked"
 opt-level = 3
 
 [profile.release]
-# 全部 release 产物（GPUI 桌面端、agent、fluxdownd、CLI、hub cdylib、nmh、
+# 全部 release 产物（GPUI 桌面端、agent、fluxdownd、CLI、原生移动端核心、nmh、
 # Docker/NAS 包）共用本 profile，统一按运行期性能优先：opt-level=3 + fat LTO +
 # 单 codegen 单元，换取最佳吞吐/延迟，代价是产物体积和编译时间。
 # 不再用 "z"：它关闭循环向量化、压低内联阈值，BT 数据面（DH768 2.46 vs 1.60 ms）、

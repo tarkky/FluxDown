@@ -1,6 +1,6 @@
 //! 持久化抽象：本机身份种子 + 已配对设备名册。
 //!
-//! 宿主各自实现：引擎（Flutter hub / 旧 headless server）落在 `link_devices` 表与
+//! 宿主各自实现：冻结的 server 经引擎落在 `link_devices` 表与
 //! `config` 表；agent 落在自己的私有状态文件。[`crate::LinkManager`] 只依赖本 trait。
 
 use async_trait::async_trait;

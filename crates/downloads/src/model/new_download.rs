@@ -1,8 +1,6 @@
 //! 「新建下载」表单的纯模型：链接解析、代理 / UA / 线程预设与请求构建。
 //!
-//! 规则与 `lib/src/widgets/new_download_dialog.dart`、
-//! `lib/src/models/task_proxy_choice.dart`、`lib/src/models/ua_presets.dart`
-//! 与 `lib/src/widgets/thread_selector.dart` 逐条对齐，不依赖 GPUI。
+//! 链接解析、任务代理、UA 预设与线程选择的纯规则，不依赖 GPUI。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -243,7 +241,7 @@ pub(crate) const PROXY_DIRECT_SENTINEL: &str = "direct://";
 /// 跟随系统代理哨兵值。
 pub(crate) const PROXY_SYSTEM_SENTINEL: &str = "system://";
 
-/// 任务代理选择项；wire 语义见 `lib/src/models/task_proxy_choice.dart`。
+/// 任务代理选择项。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProxyChoice {
     FollowGlobal,
@@ -306,7 +304,7 @@ pub(crate) fn manual_proxy_url(config: &BTreeMap<String, String>) -> String {
     url
 }
 
-/// Dart `Uri.encodeComponent`：除 `A-Za-z0-9-_.!~*'()` 外全部按 UTF-8 百分号编码。
+/// URI 组件编码：除 `A-Za-z0-9-_.!~*'()` 外全部按 UTF-8 百分号编码。
 fn encode_component(value: &str, out: &mut String) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     for byte in value.bytes() {
@@ -320,7 +318,7 @@ fn encode_component(value: &str, out: &mut String) {
     }
 }
 
-/// 预设 UA（key → UA 字符串）。版本基准与 `lib/src/models/ua_presets.dart` 一致。
+/// 预设 UA（key → UA 字符串）。
 pub(crate) const UA_PRESETS: &[(&str, &str)] = &[
     (
         "chrome",
@@ -440,7 +438,7 @@ pub(crate) struct DraftOptions {
 
 /// 每条条目一个 [`CreateTaskRequest`]，共享字段来自 [`DraftOptions`]。
 ///
-/// 与 Dart 一致：单条时重命名优先于 `out=`、高级面板校验值优先于
+/// 单条时重命名优先于 `out=`、高级面板校验值优先于
 /// `checksum=`、附带 HTTP 认证；多条时仅使用条目自带的文件名 / 校验值。
 pub(crate) fn build_requests(
     entries: &[UrlEntry],

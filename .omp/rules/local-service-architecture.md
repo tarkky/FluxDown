@@ -4,7 +4,7 @@ condition: native/**
 interruptMode: never
 ---
 
-你正在修改 FluxDown Rust 本机核心或宿主。GPUI 桌面与 headless 已运行于 `native/{protocol,daemon,agent}` 链路；Flutter 的 legacy hub 仍须保持现有 wire 兼容。
+你正在修改 FluxDown Rust 本机核心或宿主。GPUI 桌面与 headless 运行于 `native/{protocol,daemon,agent}`；原生 Android/iOS 经 `native/mobile` 复用进程内 daemon + agent 或连接远端 `/rpc`。
 
 ## 固定分层
 
@@ -54,17 +54,16 @@ protocol <- daemon / agent / clients
 ```
 
 - 上图的 `daemon <- agent` 表示运行期 RPC，不表示 agent 可依赖 daemon 实现 crate。
-- daemon 不依赖 agent、server、hub 或 `crates/*`。
-- agent 不依赖 engine、server、hub 或 GPUI capability crate。
+- daemon 不依赖 agent、server 或 `crates/*`。
+- agent 不依赖 engine、server 或 GPUI capability crate。
 - protocol 不依赖 engine、daemon、agent、api、Tokio/Axum、数据库或 GPUI。
 - 官方 UI 默认只连 agent；纯下载第三方客户端可以直连 daemon。
 
 ## 迁移纪律
 
-- 当前 Flutter App 仍由 `hub` 宿主；新 daemon 未覆盖的行为不得删除或宣称已迁移。
-- 从 server/hub 迁移实现时复用 `EventSink`、`HostSelection`、`ApiHost` 与既有错误类型；禁止复制出第二套引擎 actor 语义。
-- 一个 data dir 同时只允许一个 Engine/daemon 写入；迁移期禁止 daemon 与 hub/server/CLI `--local` 共享 DB 并发运行。
-- 云功能从 Flutter `lib/src/services/cloud/` 迁移到 agent 后，删除 Dart 对应状态机；不保留双 Token、双 SSE、双 revision 实现。
+- 原生移动端复用 `EventSink`、`HostSelection`、`ApiHost` 与既有错误类型；禁止复制出第二套引擎 actor 语义。
+- 一个 data dir 同时只允许一个 Engine/daemon 写入；禁止 daemon 与其它宿主或 CLI `--local` 共享 DB 并发运行。
+- 云状态机只归 agent；不保留双 Token、双 SSE、双 revision 实现。已被当前客户端消费的旧数据迁移与主题兼容必须保留。
 - 只为真实迁移切片创建模块；禁止预建空目录、空 trait、占位 handler、假成功响应或无运行行为的二进制。
 
 ## 修改前检查

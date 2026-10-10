@@ -1,7 +1,7 @@
 //! [`LinkManager`] —— 设备互联子系统门面。
 //!
 //! 聚合身份、名册存储（[`LinkStorage`]）、配对协议（响应方 + 发起方）、mDNS 发现、
-//! 可扩展传输栈，供宿主（hub 桌面 / headless server / agent）驱动。宿主只跟本门面 +
+//! 可扩展传输栈，供宿主（agent / 冻结的 server）驱动。宿主只跟本门面 +
 //! 一个事件通道打交道。
 //!
 //! # 角色
@@ -43,7 +43,7 @@ pub const LINK_INFO_PATH: &str = "/api/v1/link/info";
 /// 数据面：下发下载任务的路径（与 `fluxdown_api::routes::API_LINK_TASKS` 一致）。
 pub const LINK_TASKS_PATH: &str = "/api/v1/link/tasks";
 
-/// 引擎侧设备互联事件（宿主消费：hub 转 rinf 信号，server 可广播 WS）。
+/// 设备互联事件，由宿主消费并转换为协议通知。
 #[derive(Debug, Clone)]
 pub enum LinkEngineEvent {
     /// mDNS/手动发现到一台设备。
@@ -172,7 +172,7 @@ pub struct LinkOptions {
 }
 
 impl LinkOptions {
-    /// 局域网可达且允许广播（hub / 旧 server 的既有行为）。
+    /// 局域网可达且允许广播（保持既有发现行为）。
     #[must_use]
     pub fn reachable(api_port: u16) -> Self {
         Self {

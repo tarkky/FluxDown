@@ -20,7 +20,7 @@ export interface CategoryRule {
 export const BUILTIN_ALL_ID = 'builtin_all'
 export const BUILTIN_OTHER_ID = 'builtin_other'
 
-/** 内置分类基线（与 Flutter `CustomCategory.builtinDefaults` 同序同扩展名）。 */
+/** 内置分类基线：固定显示顺序与默认扩展名。 */
 export function builtinDefaults(): CustomCategoryDto[] {
   const make = (id: string, icon: string, extensions: string[], position: number): CustomCategoryDto => ({
     id: `builtin_${id}`,

@@ -1,9 +1,7 @@
 //! 引擎领域数据类型。
 //!
-//! 字段形状 1:1 复制自 `hub::signals` 中对应的 FFI DTO(参见每个类型上的
-//! doc comment 溯源),但不带任何 `rinf` derive 宏——引擎不知道、也不依赖
-//! Rinf/Dart 信号层。`hub` 侧通过 `signal_bridge` 模块的 `From`/`TryFrom`
-//! 实现在这些类型与 `hub::signals::*` 之间转换。
+//! 纯引擎数据模型，不依赖 UI 或 FFI。宿主负责转换为各自的 wire DTO；
+//! 字段语义保持持久化数据与协议兼容。
 
 /// 内置「主队列」的固定 ID。所有未显式指定队列的新任务归入此队列；
 /// 不可删除、不可重命名（宿主 UI 按 ID 本地化显示名称）。
@@ -26,7 +24,7 @@ pub fn is_builtin_queue(queue_id: &str) -> bool {
     queue_id == MAIN_QUEUE_ID || queue_id == LATER_QUEUE_ID
 }
 
-/// 持久化任务信息。字段对应 `hub::signals::TaskInfo`。
+/// 持久化任务信息。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskInfo {
     pub task_id: String,
@@ -158,7 +156,7 @@ impl SourceBytes {
     }
 }
 
-/// 命名队列元数据。字段对应 `hub::signals::QueueInfo`。
+/// 命名队列元数据。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueInfo {
     pub queue_id: String,
@@ -190,7 +188,7 @@ pub struct QueueInfo {
     pub schedule_days: i32,
 }
 
-/// 单个任务在队列中的位置。字段对应 `hub::signals::QueuePosition`。
+/// 单个任务在队列中的位置。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuePosition {
     pub task_id: String,
@@ -198,7 +196,7 @@ pub struct QueuePosition {
     pub position: i32,
 }
 
-/// 单个分段的字节范围与进度。字段对应 `hub::signals::SegmentDetail`。
+/// 单个分段的字节范围与进度。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SegmentDetail {
     pub index: i32,
@@ -208,7 +206,6 @@ pub struct SegmentDetail {
 }
 
 /// 多 CDN 并发的单节点描述（`EngineEvent::TaskCdnEvent` 载荷）。
-/// 字段对应 `hub::signals::CdnNodeDetail`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CdnNodeInfo {
     /// 节点 IP；SYS 兜底节点（系统 DNS、无钉定）为 `"SYS"`。
@@ -225,7 +222,7 @@ pub struct CdnNodeInfo {
     pub active: i32,
 }
 
-/// BT 种子内的单个文件条目。字段对应 `hub::signals::BtFileEntry`。
+/// BT 种子内的单个文件条目。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BtFileEntry {
     /// 种子内从 0 开始的文件索引。
@@ -236,7 +233,7 @@ pub struct BtFileEntry {
     pub size: i64,
 }
 
-/// HLS 可选码率变体。字段对应 `hub::signals::HlsQualityOption`。
+/// HLS 可选码率变体。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HlsQualityOption {
     pub index: i32,
@@ -245,7 +242,7 @@ pub struct HlsQualityOption {
     pub height: i64,
 }
 /// 插件 resolve 返回的可选变体（画质/格式），供宿主弹框让用户选择。
-/// 字段对应 `hub::signals::ResolveVariantOption`。含 `String`，非 `Copy`。
+/// 含 `String`，非 `Copy`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolveVariantOption {
     /// 变体在列表中的索引（从 0 开始）。
@@ -265,7 +262,6 @@ pub struct ResolveVariantOption {
 }
 
 /// 解析出的种子元数据(用于新建下载对话框预览)。
-/// 字段对应 `hub::signals::TorrentMetaResult`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TorrentMetaResult {
     /// 回显自请求方传入的 probe id,用于匹配响应。
@@ -281,8 +277,7 @@ pub struct TorrentMetaResult {
 }
 
 /// 任务组元数据（多文件任务组的壳，纯逻辑聚合层——不参与调度/限速，见
-/// `docs/multi-file-task-group-design.md` §4.3）。字段对应
-/// `hub::signals::GroupInfo`。
+/// `docs/multi-file-task-group-design.md` §4.3）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupInfo {
     pub group_id: String,
@@ -297,7 +292,7 @@ pub struct GroupInfo {
 }
 
 /// 预解析清单的单个条目（供 [`crate::events::EngineEvent::ResolvePreviewReady`]
-/// 展示，字段对应 `hub::signals::ManifestItemInfo`）。
+/// 展示）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestItemInfo {
     /// 插件自定义标识，回传 `resolver_item` 用（不透明字符串，引擎不解释语义）。
@@ -311,8 +306,7 @@ pub struct ManifestItemInfo {
     pub variants: Vec<ManifestVariantInfo>,
 }
 
-/// [`ManifestItemInfo::variants`] 的单个规格。字段对应
-/// `hub::signals::ManifestVariantInfo`。
+/// [`ManifestItemInfo::variants`] 的单个规格。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestVariantInfo {
     pub id: String,

@@ -1,5 +1,5 @@
 // 「新建下载」表单的纯模型：链接解析、代理 / UA / 线程预设与请求构建。
-// 移植自 crates/downloads/src/model/new_download.rs（规则与 Flutter new_download_dialog 逐条对齐）。
+// 与 crates/downloads/src/model/new_download.rs 的桌面端规则保持同步。
 
 import type { CreateTaskRequest } from '../../../lib/rpc'
 import { MAX_TASK_SEGMENTS } from '../../../lib/threadsRisk'
@@ -175,7 +175,7 @@ export function manualProxyUrl(config: Readonly<Record<string, string>>): string
   return `${url}${host}:${port}`
 }
 
-/** 预设 UA（key → UA 字符串）。版本基准与 Flutter ua_presets.dart 一致。 */
+/** 预设 UA（key → UA 字符串）。与桌面端 new_download.rs 保持同步。 */
 export const UA_PRESETS: readonly { key: string; value: string }[] = [
   {
     key: 'chrome',

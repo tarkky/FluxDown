@@ -157,7 +157,7 @@ pub const AGENT_SYNC_NOW: &str = "agent.sync.now";
 pub const AGENT_SYNC_SET_LOCAL_ONLY: &str = "agent.sync.setLocalOnly";
 /// FluxCloud 服务地址读取；正式构建 `editable=false`，地址恒为构建期固定值。
 pub const AGENT_CLOUD_ENDPOINT_GET: &str = "agent.cloud.endpointGet";
-/// 仅调试构建可用（对齐 Flutter `CloudApiConfig`）：覆盖/恢复 FluxCloud 服务地址，立即生效。
+/// 仅调试构建可用：覆盖/恢复 FluxCloud 服务地址，立即生效。
 pub const AGENT_CLOUD_ENDPOINT_SET: &str = "agent.cloud.endpointSet";
 pub const AGENT_REMOTE_LIST: &str = "agent.remote.list";
 pub const AGENT_REMOTE_DISPATCH: &str = "agent.remote.dispatch";

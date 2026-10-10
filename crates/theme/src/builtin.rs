@@ -1,4 +1,4 @@
-//! 内置主题基底：Flutter `FluxThemeTokens` 预设 Layer0 颜色 → Base 语义 token，
+//! 内置主题基底：沿用既有预设的 Layer0 颜色 → Base 语义 token，
 //! 以及 `extends: "builtin:*"` 的取值。
 
 use gpui::{FontWeight, Hsla, Rgba, px, rgb};
@@ -18,7 +18,7 @@ pub const MONO_FONT_SENTINEL: &str = "monospace";
 /// Linux 系统无衬线字体），运行时替换为 gpui 的 `.SystemUIFont`；网页预览可直接当 CSS 通用族名使用。
 pub const SANS_FONT_SENTINEL: &str = "system-ui";
 const SHADOW_ALPHA: f32 = 46.0 / 255.0;
-/// Flutter `accentBackground` alpha 的 8-bit 量化：0.10 / 0.15 / 0.18。
+/// 强调色背景透明度的 8-bit 量化：0.10 / 0.15 / 0.18。
 const ACCENT_ALPHA_LIGHT: u8 = 26;
 const ACCENT_ALPHA_SOFT: u8 = 38;
 const ACCENT_ALPHA_DARK: u8 = 46;
@@ -102,7 +102,7 @@ impl From<BuiltinThemeId> for BuiltinBase {
 
 /// 基底在某模式下全部 Base token 的值（注册表顺序）。
 ///
-/// `accent` 为用户强调色：与 Flutter 预设工厂的 `accent` 参数一致，重算
+/// `accent` 为用户强调色，用于重算
 /// `primary` / `accent` / `ring` 系列；文件中显式给出的值仍优先于基底。
 pub(crate) fn base_values(
     base: BuiltinBase,
@@ -151,11 +151,11 @@ fn semantic_tokens(colors: ColorTokens) -> SemanticThemeTokens {
     }
 }
 
-/// Flutter `FluxThemeTokens` 工厂中映射到 Base token 的 Layer0 颜色。
+/// 预设中映射到 Base token 的 Layer0 颜色。
 struct Palette {
     accent: u32,
     accent_background_alpha: u8,
-    /// Flutter 固定的 `accentForeground`（如 Nord）；`None` 按强调色亮度自动取黑/白。
+    /// 预设固定的强调色前景（如 Nord）；`None` 按强调色亮度自动取黑/白。
     accent_foreground: Option<u32>,
     background: u32,
     surface1: u32,
@@ -243,7 +243,7 @@ impl BuiltinThemeId {
 /// `RefAlpha("colors.primary", 0.3)` 一致。
 const TEXT_SELECTION_ALPHA: f32 = 0.3;
 
-/// Flutter Layer0 → Base 语义 token 的固定映射。
+/// Layer0 → Base 语义 token 的固定映射。
 fn color_tokens(palette: &Palette) -> ColorTokens {
     let accent = color(palette.accent);
     ColorTokens {
@@ -284,7 +284,7 @@ pub const ACCENT_TOKEN_PATHS: [&str; 5] = [
 ];
 
 /// 重算由强调色派生的 token。`primary_foreground` 仅在原值是按亮度自动
-/// 推导时才跟随新强调色；预设固定的前景（Nord）保持不变，与 Flutter 一致。
+/// 推导时才跟随新强调色；预设固定的前景（Nord）保持不变。
 fn apply_accent(colors: &mut ColorTokens, accent: Hsla) {
     let auto_foreground = colors.primary_foreground == foreground_for(colors.primary);
     colors.primary = accent;
@@ -297,7 +297,7 @@ fn apply_accent(colors: &mut ColorTokens, accent: Hsla) {
     colors.selection = accent.alpha(TEXT_SELECTION_ALPHA);
 }
 
-/// Flutter `_foregroundFor`：强调色相对亮度 > 0.5 取近黑，否则取白。
+/// 强调色相对亮度 > 0.5 取近黑，否则取白。
 #[must_use]
 pub fn foreground_for(accent: Hsla) -> Hsla {
     if relative_luminance(accent) > 0.5 {
@@ -307,7 +307,7 @@ pub fn foreground_for(accent: Hsla) -> Hsla {
     }
 }
 
-/// WCAG 相对亮度（Flutter `Color.computeLuminance`）。
+/// WCAG 相对亮度。
 pub(crate) fn relative_luminance(value: Hsla) -> f32 {
     fn linear(channel: f32) -> f32 {
         if channel <= 0.039_28 {

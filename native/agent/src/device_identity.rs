@@ -1,6 +1,6 @@
 //! 本机设备身份探测：真实主机名，以及 Flutter 时代 `cloud_device_id` 的一次性沿用。
 //!
-//! Flutter 客户端把设备 id 存在 `KvStore`（`lib/src/services/kv_store.dart`）：
+//! 旧 Flutter 客户端通过 `KvStore` 保存设备 id：
 //! 便携模式 = `<engine 数据目录>/settings.json`（键无前缀）；安装模式 = `shared_preferences`
 //! 插件后端，键带 `flutter.` 前缀：
 //! - Windows：`%APPDATA%\FluxDown\FluxDown\shared_preferences.json`（CompanyName / ProductName）；

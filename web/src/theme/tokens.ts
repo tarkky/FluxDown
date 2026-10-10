@@ -21,7 +21,7 @@ const MIN_PRIMARY_CONTRAST = 4.5
 const NEAR_BLACK = '#09090bff'
 const WHITE = '#ffffffff'
 
-/** Flutter `_foregroundFor`：强调色相对亮度 > 0.5 取近黑，否则取白。 */
+/** 强调色相对亮度 > 0.5 取近黑，否则取白。 */
 function foregroundFor(accent: Hsla): string {
   return relativeLuminance(accent) > 0.5 ? NEAR_BLACK : WHITE
 }

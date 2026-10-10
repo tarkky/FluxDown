@@ -5,8 +5,8 @@ name: Manual Client Test Packages
 # macOS scripts/package_gpui_macos.sh，测试包为 ad-hoc 签名、不公证）。
 # iOS（原生 mobile/FluxDown）复用 ios-testflight.yml：App Store 签名后直接上传 TestFlight，
 # 内部组「Internal」自动可用；IPA 只能经 TestFlight 安装，artifact 里的 IPA / dSYM 仅供排查。
-# android-native（原生 mobile/Android）复用 android-package.yml：原生版自己的密钥签名，artifact 里直接装；
-# android 仍是 Flutter 版测试 APK。两者签名不同，不能互相覆盖安装。
+# android-native（原生 mobile/Android）复用 android-package.yml：与正式发布共用原生密钥，artifact 里直接装。
+# 原生签名不兼容旧 Flutter APK，不能覆盖安装；all 包含原生 Android 和 iOS。
 on:
   workflow_dispatch:
     inputs:
@@ -18,7 +18,7 @@ on:
       version:
         description: Three-part test version used by platform packages
         required: true
-        default: 0.0.0
+        default: 0.0.1
         type: string
       target:
         description: 要打包的平台
@@ -31,7 +31,6 @@ on:
           - windows-arm64
           - linux
           - macos
-          - android
           - android-native
           - ios
           - extension
@@ -52,6 +51,11 @@ jobs:
         run: |
           if [[ ! "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "version must match MAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          # 原生 Android 的 versionCode 由前三段派生，0.0.0 会得到非法的 0（mobile/Android/app/build.gradle.kts）
+          if [ "${{ inputs.version }}" = 0.0.0 ] && { [ "${{ inputs.target }}" = all ] || [ "${{ inputs.target }}" = android-native ]; }; then
+            echo "version must be greater than 0.0.0 when building android-native"
             exit 1
           fi
       - name: Set version outputs
@@ -236,64 +240,6 @@ jobs:
           path: |
             build/installer/*.dmg
             build/installer/*.tar.gz
-          if-no-files-found: error
-
-  build-android:
-    name: Test Android APK
-    needs: version
-    if: inputs.target == 'all' || inputs.target == 'android'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref }}
-      - name: Setup JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      # packages 显式指定：默认值含已下架的 legacy `tools` 包，会导致 sdkmanager 失败
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
-      - name: Setup Rust Android targets
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-      - name: Setup Flutter and build
-        shell: bash
-        env:
-          CARGO_HTTP_MULTIPLEXING: "false"
-          CARGO_NET_RETRY: "10"
-        run: |
-          flutter --version
-          flutter pub get
-          cargo install rinf_cli@8.9.0
-          rinf gen
-          flutter build apk --release --split-per-abi --build-name=${{ needs.version.outputs.clean_version }} --build-number=1 --dart-define=APP_VERSION=${{ needs.version.outputs.version }}
-          flutter build apk --release --build-name=${{ needs.version.outputs.clean_version }} --build-number=1 --dart-define=APP_VERSION=${{ needs.version.outputs.version }}
-      - name: Collect Android artifacts
-        shell: bash
-        run: |
-          mkdir -p build/android
-          VERSION=${{ needs.version.outputs.version }}
-          SRC=build/app/outputs/flutter-apk
-          cp "$SRC/app-arm64-v8a-release.apk" "build/android/FluxDown-${VERSION}-android-arm64-v8a.apk"
-          cp "$SRC/app-armeabi-v7a-release.apk" "build/android/FluxDown-${VERSION}-android-armeabi-v7a.apk"
-          cp "$SRC/app-x86_64-release.apk" "build/android/FluxDown-${VERSION}-android-x86_64.apk"
-          cp "$SRC/app-release.apk" "build/android/FluxDown-${VERSION}-android-universal.apk"
-      - name: Upload Android test artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: manual-android-${{ github.run_number }}
-          path: build/android/*.apk
           if-no-files-found: error
 
   build-extension:

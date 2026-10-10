@@ -369,7 +369,7 @@ impl DownloadStrings {
     }
 }
 
-/// 「新建下载」表单文案，键集与 `lib/src/widgets/new_download_dialog.dart` 一致。
+/// 「新建下载」表单文案，使用公共 i18n 资源键。
 #[derive(Clone)]
 pub(crate) struct NewDownloadStrings {
     pub(crate) subtitle: SharedString,

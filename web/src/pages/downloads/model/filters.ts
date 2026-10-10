@@ -14,7 +14,7 @@ export function statusMatches(filter: DownloadStatusFilter, state: TaskState): b
       return true
     case 'completed':
       return state === 'completed'
-    // 与 Flutter `StatusTab.downloading` 同义：下载中 + 等待中。
+    // 下载中筛选包含下载中与等待中的任务。
     case 'incomplete':
       return state === 'downloading' || state === 'pending'
     case 'failed':

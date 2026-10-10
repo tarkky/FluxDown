@@ -1,7 +1,7 @@
 // 预解析清单（ResolvePreviewResponse.items）→ 建组选择弹窗的纯逻辑层。
 //
-// 移植自旧 web `lib/manifest-selection.ts`（源自 Flutter manifest_selection.dart + manifest_breadcrumb.dart，
-// v1.6 下钻导航版）。不依赖 React：可见性判定（扩展名筛选 + 搜索）、当前层行流生成（单链目录合并 +
+// 多文件清单下钻导航的纯模型。不依赖 React：可见性判定（扩展名筛选 + 搜索）、
+// 当前层行流生成（单链目录合并 +
 // 目录/文件排序）、返回上级跳级、目录子树三态勾选、全局选中统计、扩展名频次 top7、面包屑分段、
 // CreateGroupRequest.items 投影。
 //
@@ -51,8 +51,8 @@ export function manifestItemVisible(item: PreviewItemDto, { extFilter, search }:
 // 0. 触发条件（供 new-download.tsx 判定是否先预解析）
 // =============================================================================
 
-/** 单条链接是否值得先探测多文件清单：仅 http(s)，磁力/种子/ed2k 等协议恒不匹配（对齐
- *  Flutter new_download_dialog.dart `_isPreviewableUrl`）。多行 URL 由调用方另行判定。 */
+/** 单条链接是否值得先探测多文件清单：仅 http(s)，磁力/种子/ed2k 等协议恒不匹配。
+ *  多行 URL 由调用方另行判定。 */
 export function manifestIsPreviewableUrl(url: string): boolean {
   const lower = url.trim().toLowerCase()
   return lower.startsWith('http://') || lower.startsWith('https://')

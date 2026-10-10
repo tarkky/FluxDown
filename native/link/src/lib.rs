@@ -1,6 +1,6 @@
 //! 本地设备互联（device link）—— P2P 局域网配对 + mDNS 发现 + 可扩展直连传输。
 //!
-//! 与宿主无关：宿主（Flutter hub / headless server / 新 agent）只需实现 [`LinkStorage`]
+//! 与宿主无关：宿主（agent / 冻结的 server）只需实现 [`LinkStorage`]
 //! （身份种子 + 已配对名册的持久化），并驱动 [`LinkManager`]。
 //!
 //! # 分层（可扩展性设计）

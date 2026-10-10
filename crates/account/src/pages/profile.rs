@@ -1,6 +1,5 @@
 //! 已登录 profile 卡片：头像 + 昵称/套餐徽标 + Origin ID 胶囊 + 退出登录。
-//! 视觉规则逐条对齐 Flutter `settings_page.dart` 的 `_profileBody` /
-//! `_NicknameRowState._planPill` / `_PlanTag`：
+//! 视觉规则：
 //! - 头像：强调色 12% 圆底 + 强调色首字符，无首字符回退 lucide `cloud`。
 //! - 套餐徽标：只由 `CloudPlan.badge` 决定是否显示；颜色取 `badge_color`（回退强调色）；
 //!   样式 outline / solid / medal / ribbon / plain；`badge_numbered` 时追加 `No.0001`。
@@ -21,7 +20,7 @@ use crate::profile_edit::{ProfileField, can_edit_origin_id};
 use crate::t;
 use crate::view::AccountView;
 
-/// 与 Flutter 的 `withValues(alpha: 0.12)` 一致的浅底透明度。
+/// 头像与徽标的浅底透明度。
 const TINT_ALPHA: f32 = 0.12;
 
 /// 昵称首字符大写；无可用字符返回 `None`（头像回退图标）。
@@ -322,7 +321,7 @@ pub(crate) fn plan_badge(
     Some(plan_tag(tokens, extended, text, color, &plan.badge_style))
 }
 
-/// Flutter `_withMembershipOrdinal`：`{badge} No.{ordinal 补零到 digits(1..=6)}`。
+/// 会员序号：`{badge} No.{ordinal 补零到 digits(1..=6)}`。
 fn with_membership_ordinal(base: &str, ordinal: Option<i64>, digits: i64) -> SharedString {
     match ordinal {
         Some(ordinal) => {
@@ -333,7 +332,7 @@ fn with_membership_ordinal(base: &str, ordinal: Option<i64>, digits: i64) -> Sha
     }
 }
 
-/// Flutter `_PlanTag`：outline | solid | medal | ribbon | plain，全部纯色/描边，不用渐变。
+/// 套餐徽标：outline | solid | medal | ribbon | plain，全部纯色/描边，不用渐变。
 /// 字号统一 caption（11/14），皇冠图标 `icon.sm`，内边距走 spacing token。
 fn plan_tag(
     tokens: &SemanticThemeTokens,
@@ -408,7 +407,7 @@ fn plan_tag(
     }
 }
 
-/// Flutter `_tryParseHexColor`：接受可选 `#` 前缀的 6 位 `RRGGBB` 或 8 位 `AARRGGBB`。
+/// 接受可选 `#` 前缀的 6 位 `RRGGBB` 或 8 位 `AARRGGBB`。
 pub(crate) fn parse_hex_color(value: &str) -> Option<Hsla> {
     let hex = value.trim().trim_start_matches('#');
     let parsed = u32::from_str_radix(hex, 16).ok()?;

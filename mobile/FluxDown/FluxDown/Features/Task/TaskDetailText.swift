@@ -86,7 +86,7 @@ enum TaskDetailText {
         }
     }
 
-    /// Auto 代理链路 wire 标签 → 文案（与 Flutter `taskRouteLabel` 同规则；未知值原样返回）。
+    /// Auto 代理链路 wire 标签 → 文案；未知值原样返回。
     static func routeLabel(_ route: String) -> String {
         var base = route
         var via: String?

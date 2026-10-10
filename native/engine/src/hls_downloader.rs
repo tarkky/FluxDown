@@ -1507,7 +1507,7 @@ async fn run_hls_download_inner(p: &DownloadParams) -> Result<i64, DownloadError
 
     p.db.update_task_status(&p.task_id, 1, "").await?;
 
-    // Notify Dart: downloading started with file name
+    // Notify the host: downloading started with file name
     if p.progress_tx
         .send(ProgressUpdate {
             task_id: p.task_id.clone(),

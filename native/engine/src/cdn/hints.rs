@@ -2,7 +2,7 @@
 //!
 //! `GET {base}/api/v1/cdn/hints?host=` 是公开限频端点（k-匿名聚合数据，
 //! 无个体信息），引擎用轻量 client 直接拉取——不需要云端会话，`base` 由
-//! Dart 云服务在登录/拉到 cdn config 后写入 config 表 `cdn_hints_base`
+//! agent `cdn_worker` 在登录/拉到 cdn config 后经 daemon 写入 config 表 `cdn_hints_base`
 //! （空 = 禁用，未登录/断云天然禁用）。
 //!
 //! 定位（方案 §5.4 原则）：hints **只影响候选排序**（热门节点排前，优先

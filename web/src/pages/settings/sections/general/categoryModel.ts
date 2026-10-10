@@ -1,5 +1,5 @@
 // 自定义分类模型（镜像 crates/settings/src/sections/categories.rs + category_dialog.rs）。
-// 目录名净化 / 拼接复用 `lib/category-dir`（与 Flutter `custom_category.dart` 逐字一致的镜像契约），
+// 目录名净化 / 拼接复用 `lib/category-dir`（与 GPUI 分类目录保持逐字一致），
 // 列表读取与内置基线复用下载页的 `model/categories`。
 
 import type { TFunction } from '../../../../i18n'

@@ -9,6 +9,7 @@
 #   --cloud-url URL  FluxCloud 地址，编译期写入核心（等价于导出 FLUXCLOUD_BASE_URL；参数优先）。
 #                    都未提供时核心回退到 http://127.0.0.1:8720（本机 FluxCloud 开发服务），脚本会提示。
 #   --run            核心构建完后顺带构建 App，安装并重启到已启动的模拟器（无需再回 Xcode 点运行）。
+# 可选 FLUXDOWN_APP_VERSION：编译期产品版本（协议握手 / 云端 / UA）；testflight.sh 按 --version 注入，未设置回落 crate 版本。
 # 前置：rustup target add aarch64-apple-ios aarch64-apple-ios-sim；Xcode 命令行工具。
 set -euo pipefail
 

@@ -1730,8 +1730,8 @@ fn failure_identity(dir: &Path, identity_hint: Option<&str>) -> String {
 /// `FailedPlugin.error` 的可读渲染上限（671#9）：来源之一是
 /// `manifest.validate()` 的错误文本，会原样插值插件可控的 manifest 字符串
 /// （identity/version/icon 路径等，见 `manifest.rs` 的 `ManifestInvalid`
-/// 消息），未经任何长度上限就会随每次插件列表刷新原样进 `PluginInfo`（bincode
-/// 过 rinf / REST `PluginDto`）并被客户端逐字渲染。截断只在这一处生效——
+/// 消息），未经任何长度上限就会随每次插件列表刷新原样进入 `PluginInfo` /
+/// REST `PluginDto` 并被客户端逐字渲染。截断只在这一处生效——
 /// `list()` 是 `FailedPlugin.error` 唯一的对外读出口。
 const MAX_LOAD_ERROR_LEN: usize = 1024;
 

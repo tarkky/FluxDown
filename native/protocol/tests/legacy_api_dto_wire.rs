@@ -11,8 +11,8 @@ struct DeserCase {
     check: fn(&DownloadRequest),
 }
 
-/// 迁移自旧 `native/hub/src/native_messaging.rs` 的 `DownloadRequest` 反序列化
-/// 测试套件：浏览器扩展 / 油猴脚本发来的 wire JSON 必须精确映射到字段。
+/// Native Messaging 下载请求的反序列化兼容测试：
+/// 浏览器扩展 / 油猴脚本发来的 wire JSON 必须精确映射到字段。
 #[test]
 fn download_request_deserializes_wire_fields() {
     let cases = [

@@ -15,7 +15,7 @@
 //! - 凭据以明文存于本地数据库（与代理 URL 内嵌密码、Cookie 同级，现有先例）；
 //! - 注入的 Authorization 头由 reqwest 在跨 host 重定向时自动剥除
 //!   （`remove_sensitive_headers`），不会泄漏到第三方；
-//! - 日志导出侧已有 Authorization 头脱敏规则（Dart `log_service`）。
+//! - 日志导出侧已有 Authorization 头脱敏规则（`fluxdown_logfile::SANITIZE_PATTERNS`，agent 导出与引擎共用）。
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;

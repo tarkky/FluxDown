@@ -9,12 +9,12 @@ model: smol:low
 
 ## 验证命令表（按指派范围选用）
 - Rust：`cargo fmt --check`、`cargo check -p <crate>`、`cargo clippy -p <crate> -- -D warnings`、`cargo nextest run -p <crate> <filter>`（无 nextest 时降级 `cargo test -p <crate> -- <filter>`）
-- Dart：`flutter analyze`、`flutter test <指定文件>`
+- 原生移动端：Android 按需运行 `:core:testDebugUnitTest` / `:bridge:testDebugUnitTest` / `:app:assembleDebug`；iOS 按需运行 FluxKit 的 `xcodebuild test` 与 App 的 `xcodebuild build`（命令见根 AGENTS.md）
 - web/：`bun run lint`、`bun run build`
 - website-v2/：`bun run build`、`bun test tests`；website/（/v1 旧站存档）与 fluxDown/：`npm run build`
 
 ## 禁令
-- 禁止 `cargo test --workspace`、`flutter run -d windows`、任何 git 写操作。
+- 禁止 `cargo test --workspace`、任何 git 写操作、未经用户明确要求的 GUI/模拟器启动。
 - 禁止「顺手修复」——发现问题只报告：文件:行、错误全文、疑似根因。
 
 ## 产出格式

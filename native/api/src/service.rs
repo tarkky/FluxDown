@@ -1,6 +1,6 @@
 //! API 宿主契约 —— [`ApiHost`] trait。
 //!
-//! HTTP 层只依赖本 trait，不关心宿主形态：legacy hub/server 与
+//! HTTP 层只依赖本 trait，不关心宿主形态：冻结的 server 与
 //! `fluxdown-agent` 都在各自边界实现能力，API crate 不依赖下载引擎。
 
 use std::collections::HashMap;
@@ -574,7 +574,7 @@ pub enum TaskEventKind {
 }
 
 /// 按「前态 → 新状态」判定应广播的 aria2 WS 通知事件类别（`None` = 不发，
-/// 仅登记新状态）。纯函数，宿主（hub 桌面端 / server headless 端）共用同一份
+/// 仅登记新状态）。纯函数，各 API 宿主共用同一份
 /// 判定规则——历史上两端各自维护过一份，在 `next=2` 分支上曾经分叉
 /// （server 旧实现无视 `prev` 一律发 `Pause`），此函数是唯一权威实现。
 ///

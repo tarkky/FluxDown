@@ -4,11 +4,11 @@ use std::borrow::Cow;
 
 use gpui::{AssetSource, Result, SharedString};
 
-/// 套餐徽标皇冠（Flutter `LucideIcons.crown`）。
+/// 套餐徽标皇冠。
 pub const CROWN_ICON_PATH: &str = "fluxdown/icons/crown.svg";
-/// 头像无可用首字符时的回退云图标（Flutter `LucideIcons.cloud`）。
+/// 头像无可用首字符时的回退云图标。
 pub const CLOUD_ICON_PATH: &str = "fluxdown/icons/cloud.svg";
-/// 刷新云端信息（Flutter `LucideIcons.refreshCw`）。
+/// 刷新云端信息。
 pub const REFRESH_ICON_PATH: &str = "fluxdown/icons/refresh-cw.svg";
 
 const ICONS: &[(&str, &[u8])] = &[

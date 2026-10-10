@@ -12,7 +12,7 @@ export default defineConfig({
   plugins: [react(), babel({ presets: [reactCompilerPreset()] }), tailwindcss()],
   resolve: {
     alias: {
-      // 与 GPUI/Flutter 共享的资源与主题实现：直接从仓库根引用，不复制。
+      // 与 GPUI 共享的资源与主题实现：直接从仓库根引用，不复制。
       '@i18n-assets': fileURLToPath(new URL('../assets/i18n', import.meta.url)),
       '@gpui-theme': fileURLToPath(new URL('../website-v2/src/lib/gpui-theme', import.meta.url)),
       // 内置文件图标包与扩展名 → 大类表（GPUI `crates/icon_pack` 编译期嵌入同一批文件）。

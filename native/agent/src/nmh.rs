@@ -558,8 +558,8 @@ where
 /// [`auto_register`] 按 [`may_take_over`] 的归属规则决定是否改指向本安装，避免两份
 /// 安装每次启动互相覆盖；但另一份安装的中继若实测连不到正在运行的本 agent（端点或帧
 /// 协议不同），保留它只会让扩展显示未连接，此时总是接管。Doctor 的显式修复 [`register`]
-/// 总是指向本安装。按路径判定的归属规则与 `native/hub/src/nmh_registry.rs` 一致，
-/// 改一处必须同步另一处；连通性实测只在 agent 侧。
+/// 总是指向本安装。按路径判定的归属规则保留旧安装兼容，另以连通性实测
+/// 判断旧中继是否仍可使用。
 pub mod registry {
     use std::io;
     use std::path::{Path, PathBuf};

@@ -11,7 +11,7 @@ describe('webhook template preview', () => {
     expect(renderPreview('"{event.title}"', false)).toBe('"Download completed"')
   })
 
-  test('form encoding matches Dart encodeQueryComponent', () => {
+  test('form encoding preserves component-safe characters and encodes separators', () => {
     expect(formEncode("a b-_.!~*'()")).toBe("a+b-_.!~*'()")
     expect(formEncode('/?&=')).toBe('%2F%3F%26%3D')
   })

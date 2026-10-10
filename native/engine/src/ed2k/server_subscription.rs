@@ -7,7 +7,7 @@
 //!
 //! 刷新触发：
 //! - 启动时缓存超过 [`REFRESH_INTERVAL_SECS`]。
-//! - 手动，经 `UpdateEd2kServerSubscription` Dart 信号。
+//! - 手动，经 `daemon.ed2k.serverSubscription.refresh` daemon RPC。
 //! - 设置里订阅 URL 列表变化时。
 //!
 //! `server.met` 格式（amule wiki，全小端）：

@@ -1,6 +1,6 @@
 //! GPUI 账户、认证、设备、订单、配置同步与推介 capability。
 //!
-//! 页面结构与 `lib/src/pages/settings_page.dart` 的 `_AccountContent` 对齐：
+//! 账号页面结构：
 //! 顶部居中的卡片列——未登录 hero / 已登录 profile、账号与安全、设备、云功能。
 
 mod assets;

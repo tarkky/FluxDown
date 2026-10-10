@@ -74,7 +74,7 @@ struct WebhookEditorSheet: View {
 
     // MARK: 草稿
 
-    /// 草稿 → 模型（与 Dart `_draft` 同序同规则）。
+    /// 草稿 → 模型。
     private func buildDraft() -> WebhookEndpoint {
         var map: [String: String] = [:]
         for row in headers {

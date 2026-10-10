@@ -1,4 +1,4 @@
-//! 自定义分类：模型（与 `lib/src/models/custom_category.dart` 同 JSON 形状）与列表分区。
+//! 自定义分类：持久化 JSON 模型与列表分区。
 
 use fluxdown_ui_components::{
     ButtonVariant, DialogIntent, FluxIcon, button, category_icon, dialog_title,

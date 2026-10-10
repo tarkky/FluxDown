@@ -13,7 +13,7 @@
 //! `Explorer\StartupApproved\Run` 首字节为奇数；XDG `Hidden=true` /
 //! `X-GNOME-Autostart-enabled=false`；macOS launchd 用户域禁用表把标签列为 disabled）。
 //!
-//! 与 Flutter 客户端（`lib/src/services/autostart_service.dart`）同一契约：
+//! 保留旧客户端的自启契约：
 //! [`enable`] 是用户在应用内的明确开启，写入条目并清除系统级禁用标记；
 //! [`retarget`] 只供启动时的自动迁移使用，只改写启动目标，**绝不**改变系统级启用状态——
 //! 用户在系统设置 / 任务管理器 / 桌面环境里关掉的自启不能被应用重新打开。

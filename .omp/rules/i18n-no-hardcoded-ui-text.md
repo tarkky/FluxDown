@@ -1,15 +1,10 @@
 ---
 description: FluxDown 面向用户的文案必须走 i18n 查表，UI 代码里禁止硬编码中文字面量
 condition:
-  - '(?m)^(?!\s*(//|///|\*|#|<!--)).*\b(Text|SelectableText)\(\s*(const\s+)?[''"][^''"\n]*[\u4e00-\u9fff]'
-  - '(?m)^(?!\s*(//|///|\*|#|<!--)).*TextSpan\(\s*text:\s*(const\s+)?[''"][^''"\n]*[\u4e00-\u9fff]'
-  - '(?m)^(?!\s*(//|///|\*|#|<!--)).*Tooltip\(\s*message:\s*(const\s+)?[''"][^''"\n]*[\u4e00-\u9fff]'
   - '(?m)^(?!\s*(//|///|\*|#|<!--)).*\b(label|title|subtitle|placeholder|description|hint|hintText|helperText|errorText|tooltip|semanticLabel|confirmText|cancelText|buttonText|emptyText)\s*:\s*(const\s+)?[''"][^''"\n]*[\u4e00-\u9fff]'
-  - '(?m)^(?!\s*(//|///|\*|#|<!--)).*String\s+get\s+\w+\s*=>\s*[''"][^''"\n]*[\u4e00-\u9fff]'
   - '(?m)^(?!\s*(//|///|\*|#|<!--)).*\b(placeholder|title|label|aria-label|alt)\s*=\s*"[^"\n]*[\u4e00-\u9fff]'
   - '(?m)^(?!\s*(//|///|\*|#|<!--)).*>[^<>{}\n]{0,80}[\u4e00-\u9fff][^<>{}\n]{0,80}<'
 globs:
-  - 'lib/**/*.dart'
   - 'web/src/**/*.tsx'
   - 'website-v2/src/**/*.{tsx,astro}'
   - 'fluxDown/**/*.{ts,tsx,html}'
@@ -23,14 +18,13 @@ repeatGap: 3
 
 | 面 | 写法 |
 |---|---|
-| App（`lib/`） | `final s = S.of(locale);` → `Text(s.xxx)`；参数化 `s.xxx(name: v)` |
+| GPUI / 原生移动端 | GPUI `ctx.t("key")`；Android 生成的 `R.string`；iOS `L("key")` |
 | Web SPA（`web/`） | `const { t } = useI18n()` → `t('xxx')` |
 | 官网（`website-v2/`） | `src/i18n/messages/<ns>.ts` 的 `defineMessages` 键；Astro 侧按页面 `lang` 取 `messages[lang]` |
 | 扩展（`fluxDown/`） | `t('section.key')`，或 HTML 上挂 `data-i18n="section.key"` |
 
-Dart 侧文案承载点不止 `Text()`——本规则覆盖：`Text(` / `SelectableText(` / `TextSpan(text:` / `Tooltip(message:`，以及**字符串直传**的命名参数 `label:`（菜单项）、`tooltip:`（`ShadIconButton`/`ShadTooltip`）、`hintText:`（输入框）、`placeholder:` / `title:` / `description:`（shadcn 多数场景传的是 `Text(...)` widget，内层照样命中）、`semanticLabel:`，以及 `String get xxx => '…'` 形式的展示名 getter。
 
-同一动作里把键补进**基线双语**：`en.json` + `zh.json`（官网 `defineMessages` 的 `en`/`zh`，扩展 `zh-CN.ts` + `en.ts`）；App 端再去 `lib/src/i18n/translations.dart` 加 getter。**ja 等社区语言不要动**（Weblate 维护，运行时按键级回退英文）——细则见规则 `i18n-baseline-zh-en`。
+同一动作里把键补进**基线双语**：`en.json` + `zh.json`（官网 `defineMessages` 的 `en`/`zh`，扩展 `zh-CN.ts` + `en.ts`）；原生移动端与 GPUI / Web 消费共享基线。**ja 等社区语言不要动**（Weblate 维护，运行时按键级回退英文）——细则见规则 `i18n-baseline-zh-en`。
 
 **可以硬编码的例外**（命中本规则时若属于以下情形，说明一句继续即可）：
 
@@ -38,4 +32,3 @@ Dart 侧文案承载点不止 `Text()`——本规则覆盖：`Text(` / `Selecta
 - **语言自称**：语言选择器里的 `简体中文` / `English` / `日本語` 等条目（`NATIVE_NAMES`、`<option value="zh-CN">简体中文</option>`）本就不该被翻译。
 - 非 UI 字符串：日志文案、异常 message、注释、测试断言、`debugPrint`。
 - 纯中文管理后台（FluxCloud `admin/`）无 i18n 层，不适用本规则。
-- Dart 里**不是文案**的同名参数：`TextEditingController(text: …)`（输入框初值）、异常/DTO 的 `message:`（只有 `Tooltip(message:` 才算 UI）、模型字段 `name:`/`description:`（存数据，不渲染）。

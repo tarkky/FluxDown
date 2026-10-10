@@ -14,7 +14,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20NAS%20%7C%20Android-8b5cf6?style=flat-square)](#installation)
 [![Rust](https://img.shields.io/badge/engine-Rust-f74c00?style=flat-square&logo=rust)](native/engine)
 [![GPUI](https://img.shields.io/badge/desktop-GPUI-f74c00?style=flat-square&logo=rust)](crates/app)
-[![Flutter](https://img.shields.io/badge/mobile-Flutter-02569B?style=flat-square&logo=flutter)](lib)
+[![Android](https://img.shields.io/badge/mobile-Kotlin%20%2B%20Swift-02569B?style=flat-square)](mobile)
 [![MCP Server](https://glama.ai/mcp/servers/zerx-lab/FluxDown/badges/score.svg)](https://glama.ai/mcp/servers/zerx-lab/FluxDown)
 
 [![Awesome Rust](https://img.shields.io/badge/Awesome-Rust-orange?logo=rust&style=flat-square)](https://github.com/rust-unofficial/awesome-rust#utilities)
@@ -38,7 +38,7 @@
 
 - **Dynamic download acceleration** — Rust + Tokio engine with adaptive segmentation and slow-segment rescue
 - **Multi-protocol** — HTTP/HTTPS, FTP, BitTorrent, eD2K, HLS & DASH streaming
-- **One engine, multiple clients** — native GPUI desktop, Flutter Android app, React Web UI and CLI
+- **One engine, multiple clients** — native GPUI desktop, Kotlin Android and SwiftUI iOS apps, React Web UI and CLI
 - **Browser integration** — Chrome / Edge / Firefox extension with a 3-layer interception engine, plus a userscript
 - **AI-agent ready** — built-in MCP (Model Context Protocol) server: let Claude, Cursor & other AI clients manage your downloads
 - **Automation & remote management** — RSS subscriptions, scheduled queues, webhooks, plugins and optional FluxCloud device collaboration
@@ -180,7 +180,7 @@ The MCP layer is implemented in [`native/api/src/mcp.rs`](native/api/src/mcp.rs)
 
 ## Architecture
 
-**One Rust download engine, multiple hosts and clients.** Desktop releases use GPUI, not Flutter. The desktop chain is `fluxdown-desktop → fluxdown-agent → fluxdownd`; headless deployments reuse the agent and daemon with a React Web UI. Flutter remains the mobile client, connected to its `hub` host through [Rinf](https://rinf.cunarist.org).
+**One Rust download engine, multiple hosts and clients.** Desktop uses `fluxdown-desktop → fluxdown-agent → fluxdownd`; headless deployments reuse the agent and daemon with a React Web UI. Native Android and iOS clients connect through UniFFI (`native/mobile`), using an embedded agent and daemon for local downloads or `/rpc` for remote hosts.
 
 ```mermaid
 flowchart TD
@@ -191,8 +191,8 @@ flowchart TD
     CLI["fluxdown CLI"] -->|"HTTP API"| AGENT
     AGENT -->|"Authenticated JSON-RPC"| DAEMON["fluxdownd — download core"]
     DAEMON --> ENGINE["fluxdown_engine"]
-    MOBILE["Flutter mobile"] -->|"Rinf signals"| HUB["hub — mobile host"]
-    HUB --> ENGINE["fluxdown_engine"]
+    MOBILE["Native Android / iOS"] -->|"UniFFI"| CORE["fluxdown_mobile"]
+    CORE -->|"embedded or remote"| AGENT
     LOCAL["fluxdown add --local"] --> ENGINE
     ENGINE --> PROTOCOLS["HTTP/HTTPS, FTP, BitTorrent, eD2K, HLS, DASH"]
     ENGINE --> DB[("SQLite / PostgreSQL")]
@@ -209,7 +209,7 @@ flowchart TD
 | Agent / daemon | UI gateway and headless host / download core | [`native/agent/`](native/agent), [`native/daemon/`](native/daemon) |
 | Shared protocol / HTTP API | JSON-RPC DTOs / REST, aria2, MCP adapters | [`native/protocol/`](native/protocol), [`native/api/`](native/api) |
 | Download engine | Rust + Tokio, no UI or FFI dependencies | [`native/engine/`](native/engine) |
-| Mobile UI / host | Flutter + shadcn_ui / Rinf | [`lib/`](lib), [`native/hub/`](native/hub) |
+| Mobile UI / bridge | Kotlin + Jetpack Compose / SwiftUI + UniFFI | [`mobile/Android/`](mobile/Android), [`mobile/FluxDown/`](mobile/FluxDown), [`native/mobile/`](native/mobile) |
 | Web management UI | React + TypeScript + Vite | [`web/`](web) |
 | CLI | HTTP client or embedded engine | [`native/cli/`](native/cli) |
 | Browser integration | WXT + TypeScript, Native Messaging, userscript | [`fluxDown/`](fluxDown), [`native/nmh/`](native/nmh), [`userscript/`](userscript) |
@@ -217,7 +217,7 @@ flowchart TD
 
 ## Building from Source
 
-Start with the [Rust toolchain](https://www.rust-lang.org/tools/install) and your platform's native build tools (MSVC on Windows, Xcode command-line tools on macOS). Linux desktop builds also need graphics, audio and tray development libraries; the maintained Ubuntu package list is in [CI](.github/workflows/ci.yml). [Bun](https://bun.sh) is needed for the Web UI; Flutter and Rinf are needed **only for mobile**, not GPUI desktop.
+Start with the [Rust toolchain](https://www.rust-lang.org/tools/install) and your platform's native build tools (MSVC on Windows, Xcode command-line tools on macOS). Linux desktop builds also need graphics, audio and tray development libraries; the maintained Ubuntu package list is in [CI](.github/workflows/ci.yml). [Bun](https://bun.sh) is needed for the Web UI. Android uses Android Studio's JBR, Android SDK/NDK and `cargo-ndk`; iOS uses Xcode.
 
 ```shell
 # Clone the development branch (main = active development, stable = stable releases)
@@ -261,19 +261,19 @@ cargo build -p fluxdown_cli
 cargo run -p fluxdown_cli -- ping
 ```
 
-### Mobile (Flutter)
+### Native mobile
 
-Install the [Flutter SDK](https://docs.flutter.dev/get-started/install) and the Android SDK (or Xcode for iOS development).
+Android lives in `mobile/Android`; iOS lives in `mobile/FluxDown`. Both use the shared Rust core in `native/mobile` and shared translations in `assets/i18n`.
 
 ```shell
-cargo install rinf_cli
-flutter pub get
-rinf gen
-flutter run -d "<mobile-device-id>"
-flutter build apk --release
+# Android: use Android Studio's JBR as JAVA_HOME
+(cd mobile/Android && ./gradlew :core:testDebugUnitTest :bridge:testDebugUnitTest :app:assembleDebug)
+# iOS: from repository root
+mobile/FluxDown/scripts/build-core.sh
+(cd mobile/FluxDown && xcodebuild build -project FluxDown.xcodeproj -scheme FluxDown -destination 'generic/platform=iOS Simulator')
 ```
 
-Android APKs are published by CI. iOS source is present, but there is no current iOS release job. Flutter desktop runners are no longer part of the desktop build.
+Official Android releases use the native project's `ANDROID_NATIVE_*` signing credentials. **They cannot be installed over the old Flutter APK**; back up needed data before uninstalling the old app. The retired Flutter SDK, Rinf and hub are no longer build prerequisites. Shared assets, legacy desktop data/theme upgrade compatibility and the website's legacy theme editor remain supported.
 
 <details>
 <summary><b>Running tests</b></summary>
@@ -284,7 +284,7 @@ cargo test -p fluxdown_api           # HTTP / aria2 / MCP contracts
 cargo test -p fluxdown_agent         # Gateway / server
 cargo test -p fluxdown_cli           # CLI
 cd web && bun test && cd ..          # Web UI
-flutter test                        # Mobile Dart tests
+cargo test -p fluxdown_mobile        # Shared native mobile core
 ```
 
 </details>
@@ -299,7 +299,6 @@ Pull requests are welcome! Branch off `main` and target `main` — it is the dev
 ```shell
 cargo fmt --check
 cargo clippy --workspace --exclude fluxdown_server --all-targets -- -D warnings
-flutter analyze                     # When changing mobile Dart code
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.

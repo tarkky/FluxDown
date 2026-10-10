@@ -79,7 +79,7 @@ fn panic_message(panic_info: &Box<dyn std::any::Any + Send>) -> String {
 }
 
 /// Handle a panicked download task: persist error status and send an error
-/// progress update to Dart. The process-wide panic hook owns the root log event;
+/// progress update to the host. The process-wide panic hook owns the root log event;
 /// the fallback below covers engine consumers that did not initialize it.
 async fn handle_task_panic(
     task_id: &str,
@@ -1825,7 +1825,7 @@ struct TaskSpeedState {
     cached_segments: Option<Vec<SegmentProgressInfo>>,
     /// Latest observed transfer sample, retained until a terminal frame clears activity.
     cached_runtime: Option<TaskRuntime>,
-    /// Last status sent to Dart.  Used to detect status transitions so that
+    /// Last status sent to the host.  Used to detect status transitions so that
     /// they are always forwarded immediately (not rate-limited).
     last_sent_status: i32,
     /// Last raw status observed from downloader updates.
@@ -2068,8 +2068,7 @@ pub struct CreateGroupSpec {
 /// [`DownloadManager::spawn_resolve_preview`] 的一次性结果，经 `oneshot`
 /// 回传给调用方（actor 内 [`DownloadManager::begin_resolve_preview`] 转发为
 /// [`crate::events::EngineEvent::ResolvePreviewReady`]；管理 API 宿主
-/// （`hub`/`server` 的 `ResolvePreview` 命令分支）直接消费本结构的字段
-/// 组装 REST 响应）。
+/// 直接消费本结构的字段组装预解析响应）。
 pub struct ResolvePreviewOutcome {
     pub name: String,
     pub items: Vec<crate::model::ManifestItemInfo>,
@@ -2831,7 +2830,7 @@ impl DownloadManager {
         self.plugin_manager = Some(pm);
     }
 
-    /// 获取插件管理器（供 hub/server ApiHost 实现读操作 + 集成测试）。
+    /// 获取插件管理器（供宿主管理接口读操作 + 集成测试）。
     #[cfg(feature = "plugins")]
     pub fn plugin_manager(&self) -> Option<Arc<crate::plugin::PluginManager>> {
         self.plugin_manager.clone()
@@ -3889,12 +3888,12 @@ impl DownloadManager {
         crate::cdn::resolver::set_ecs_subnets(json);
     }
 
-    /// Dart 遥测上报完成（config `cdn_pending_reports` 写空）→ 清空引擎侧
+    /// agent `cdn_worker` 遥测上报完成（config `cdn_pending_reports` 写空）→ 清空引擎侧
     /// 待上传样本缓冲。
     pub fn clear_cdn_pending_reports(&mut self) {
         crate::cdn::telemetry::clear();
     }
-    /// 同步落盘遥测缓冲（Dart `RequestConfig` 读 config 前由宿主调用，
+    /// 同步落盘遥测缓冲（agent `cdn_worker` 读 config 前经 daemon 调用，
     /// 保证上报读到全部内存样本，见 telemetry::flush 文档）。
     pub async fn flush_cdn_pending_reports(&self) {
         crate::cdn::telemetry::flush(&self.db).await;
@@ -4790,7 +4789,7 @@ impl DownloadManager {
         }
 
         // 2. Gracefully pause each active BT task (cancel token, persist
-        //    progress, update DB status to paused, notify Dart).
+        //    progress, update DB status to paused, notify the host).
         if !bt_task_ids.is_empty() {
             log_info!(
                 "[manager] pausing {} active BT task(s) before session invalidation",
@@ -6142,8 +6141,8 @@ impl DownloadManager {
                 }
 
                 // Now scan all save_dirs for staging dirs and handle each case.
-                // Tokio fs keeps directory enumeration/stat/delete off the hub's
-                // current-thread runtime while preserving the existing decisions.
+                // Tokio fs keeps directory enumeration/stat/delete off the host's
+                // runtime while preserving the existing decisions.
                 for save_dir in &save_dirs {
                     let dir = Path::new(save_dir);
                     let mut entries = match tokio::fs::read_dir(dir).await {
@@ -7578,7 +7577,7 @@ impl DownloadManager {
             // Only treat file_name as a custom rename target when the task
             // comes from a magnet URL and the user explicitly typed a name.
             // For .torrent-file tasks the file_name is auto-derived from the
-            // .torrent filename (without the ".torrent" extension) by the Dart
+            // .torrent filename (without the ".torrent" extension) by the client
             // layer — it has no extension and does not represent the user's
             // intent to rename the download.  Using it as custom_name would
             // cause the completed file to be saved without its real extension
@@ -8544,7 +8543,7 @@ impl DownloadManager {
                     crate::logger::report_error("download-manager", "persist task state", &error);
                     return;
                 }
-                // Notify Dart: task is now queued (pending), not actively resuming.
+                // Notify the host: task is now queued (pending), not actively resuming.
                 // Without this signal, the UI keeps all tasks stuck in "resuming" status
                 // even though only max_concurrent are actually downloading.
                 self.sink.emit(EngineEvent::TaskProgress {
@@ -10937,7 +10936,7 @@ impl DownloadManager {
     // Named queue management
     // -----------------------------------------------------------------------
 
-    /// Broadcast the current list of named queues to Dart.
+    /// Broadcast the current list of named queues to the host.
     pub async fn send_all_queues(&self) {
         match self.db.load_all_queues().await {
             Ok(queues) => self.sink.emit(EngineEvent::QueuesChanged(queues)),
@@ -11744,7 +11743,7 @@ impl DownloadManager {
     /// 「订阅」看到的是一条空列表，只能自己再按一次「立即抓取」。订阅这个动作
     /// 本身就是「我要这个源的内容」，抓取必须同步跟上。
     ///
-    /// 所有入口（Dart 信号 / REST / MCP / CLI）都应走这里而不是
+    /// 所有入口（daemon RPC / REST / MCP / CLI）都应走这里而不是
     /// `rss.create_source`——后者只落库，代理与 UA 也不在 `RssManager` 手上。
     pub async fn create_rss_source(
         &mut self,
@@ -11967,7 +11966,7 @@ impl DownloadManager {
         // 补一次全量任务快照：`create_task` 只发单条 `TaskProgress`，而该事件
         // **不带 queue_id**——客户端「按进度新建任务」只能拿到一个 queue_id 为
         // 空的条目，于是新任务不属于任何队列、队列视图里根本看不见，得手动
-        // 停/启队列触发全量刷新才归位。Dart 自己发起的创建不受影响（它本来
+        // 停/启队列触发全量刷新才归位。客户端自己发起的创建不受影响（它本来
         // 就知道队列），RSS 是引擎自发的，必须由引擎把归属补上。
         self.send_tasks_snapshot().await;
         Some(task_id)
@@ -12018,7 +12017,7 @@ impl DownloadManager {
     ///
     /// - If `task_id` is empty, or equals the current priority task → cancel boost.
     /// - Otherwise: auto-pause all other active/queued tasks, ensure the target
-    ///   task is downloading, and broadcast the new state to Dart.
+    ///   task is downloading, and broadcast the new state to the host.
     pub async fn set_priority_task(&mut self, task_id: String) {
         // Toggle off if same task or empty
         if task_id.is_empty() || self.priority_task_id.as_deref() == Some(task_id.as_str()) {
@@ -12123,7 +12122,7 @@ impl DownloadManager {
         // 验证目标任务是否真的启动成功。
         // 若 do_resume_task / resume_task 内部出错（DB 读取失败、BT 初始化失败等），
         // 任务不会出现在 active_tokens 中。此时必须取消 boost 并恢复已暂停的任务，
-        // 否则 Dart 侧会显示 boost 激活但实际无任务下载，产生莫名其妙的结果。
+        // 否则客户端会显示 boost 激活但实际无任务下载，产生莫名其妙的结果。
         if !self.active_tasks.contains_key(&task_id) {
             log_info!(
                 "[manager] boost: target task {} failed to start — cancelling boost mode",
@@ -12183,7 +12182,7 @@ impl DownloadManager {
         }
         // 在发出 PriorityTaskChanged 之前广播最新队列位置。
         // resume_task 对于无空余槽的任务只是将其入队，不会主动广播。
-        // 此次广播确保 Dart 在收到 PriorityTaskChanged 时已知道哪些任务在队列中
+        // 此次广播确保宿主在收到 PriorityTaskChanged 时已知道哪些任务在队列中
         // （queuePosition > 0），使 pauseAll 能正确识别并暂停它们。
         self.broadcast_queue_positions();
         self.sink.emit(EngineEvent::PriorityTaskChanged {
@@ -12218,7 +12217,7 @@ const SPEED_SEED_INTERVAL_MS: u128 = 300;
 /// a stall, reaching <1 KB/s in ~10 windows (~10 s) for a 1 MB/s baseline.
 const SPEED_DECAY_FACTOR: f64 = 0.5;
 
-/// Minimum interval between forwarding progress to Dart (per task) to avoid
+/// Minimum interval between forwarding progress to the host (per task) to avoid
 /// flooding the signal channel when many segments report simultaneously.
 const MIN_DART_INTERVAL_MS: u128 = 500;
 
@@ -12264,9 +12263,9 @@ pub async fn progress_reporter(
     sink: Arc<dyn EventSink>,
 ) {
     let mut states: HashMap<String, TaskSpeedState> = HashMap::new();
-    // Track last time we sent a signal to Dart per task (rate limiting).
+    // Track last time we forwarded progress to the host per task (rate limiting).
     let mut last_dart_send: HashMap<String, std::time::Instant> = HashMap::new();
-    // Track last DB persistence per task (independent of Dart updates).
+    // Track last DB persistence per task (independent of host updates).
     let mut last_db_save: HashMap<String, std::time::Instant> = HashMap::new();
     // BT 数据完成通知去重:每个 task_id 只发一次 `EngineEvent::BtDataFinished`
     // (完成搬移失败后的重试路径可能再次进入 finished 分支)。
@@ -12470,7 +12469,7 @@ pub async fn progress_reporter(
         let resolved_name = state.file_name.clone();
 
         // For terminal states (completed / error / paused) always send immediately.
-        // For downloading (status=1) and preparing (status=5), rate-limit to avoid flooding Dart.
+        // For downloading (status=1) and preparing (status=5), rate-limit to avoid flooding the host.
         // BT tasks that are actively seeding (status=3, seeding_status=1) are also
         // treated as live so the UI keeps receiving upload speed updates.
         let is_seeding = update.seeding_status == SEEDING_STATUS_ACTIVE;
@@ -16708,7 +16707,7 @@ mod tests {
     /// BT 数据下载完成标记的一次性契约(`bt_finish_notified` 去重集,见
     /// `progress_reporter` 文档):同一 task_id 第二次标记
     /// `bt_data_finished=true`(对应完成搬移失败后重试路径重新进入 finished
-    /// 分支)不得再次触发 `EngineEvent::BtDataFinished`,否则 hub/server 会
+    /// 分支)不得再次触发 `EngineEvent::BtDataFinished`,否则宿主会
     /// 对同一 GID 重复广播 `aria2.onBtDownloadComplete`。
     #[tokio::test]
     async fn progress_reporter_emits_bt_data_finished_once_and_dedupes_repeat() {

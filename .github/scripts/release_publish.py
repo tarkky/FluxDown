@@ -3,7 +3,7 @@
 
 1. 以 `SHA256SUMS-<组件>.txt` 完成哨兵判定已上传完整的组件（契约见 .github/actions/release-upload）。
 2. 把各组件哨兵合并为总校验文件 `SHA256SUMS.txt`。
-3. 刷新 release 说明头部：已发布组件清单 + 服务器 / CLI 安装说明。头部位于第一个
+3. 刷新 release 说明头部：已发布组件清单 + 服务器 / CLI / Android 安装说明。头部位于第一个
    `<!-- fluxdown:lang:* -->` 标记之前，官网 / App 的双语解析只取标记区块，不会把安装说明
    混进更新日志；组件清单变化会让补发产生 release `edited` 事件，官网据此清缓存。
 4. 草稿 → 发布（至少一个组件完整）。稳定版且桌面端完整、且是最高稳定版本时才标 latest。
@@ -112,6 +112,21 @@ fluxdown ls
 服务地址经 `--url` 或 `FLUXDOWN_URL`（默认 `http://127.0.0.1:17800`），管理 token 经 `--token` 或 `FLUXDOWN_TOKEN`。
 """
         )
+    if "mobile" in present:
+        sections.append(
+            f"""## 📱 Android
+
+| 设备 | 资产 |
+|---|---|
+| 不确定架构（通用包） | `FluxDown-{version}-android-universal.apk` |
+| 64 位 ARM（绝大多数手机） | `FluxDown-{version}-android-arm64-v8a.apk` |
+| 32 位 ARM | `FluxDown-{version}-android-armeabi-v7a.apk` |
+| x86_64（模拟器 / Chromebook） | `FluxDown-{version}-android-x86_64.apk` |
+
+⚠️ **从旧版（Flutter 版）升级**：新版 Android 客户端换用了新的签名证书，不能直接覆盖安装旧版（系统会提示「应用未安装」或签名冲突）。
+请先在旧版中记下需要保留的下载任务与设置，卸载旧版后再安装新版；卸载会清除旧版的本地数据，已下载到公共目录的文件不受影响。
+"""
+        )
     return "\n".join(sections)
 
 
@@ -122,7 +137,7 @@ def compose_body(body: str, present: list[str], version: str, repo: str, owner: 
     sections = install_sections(present, version, repo, owner)
     if sections:
         header += (
-            "<details>\n<summary>📦 下载与安装说明（服务器 / CLI）· 文件校验见 SHA256SUMS.txt</summary>\n\n"
+            "<details>\n<summary>📦 下载与安装说明（服务器 / CLI / Android）· 文件校验见 SHA256SUMS.txt</summary>\n\n"
             f"{sections}\n</details>\n"
         )
     header += "<!-- fluxdown:release:end -->\n\n"

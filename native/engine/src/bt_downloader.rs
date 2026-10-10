@@ -15,7 +15,7 @@
 //! - Speed limit is applied at the `Session` level via `ratelimits` and
 //!   updated in real-time when the user changes the global speed setting.
 //! - `add_torrent` blocks while resolving magnet metadata from DHT/peers, so
-//!   we report "preparing" status to Dart while we wait.
+//!   we report "preparing" status to the host while we wait.
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -1734,7 +1734,7 @@ struct BtInnerParams {
 }
 
 // ---------------------------------------------------------------------------
-// Task status codes — must match Dart TaskStatus enum values.
+// Task status codes — must match the `native/protocol` task status codes (.omp/knowledge/engine.md).
 // ---------------------------------------------------------------------------
 const STATUS_DOWNLOADING: i32 = 1;
 #[allow(dead_code)]
@@ -2914,7 +2914,7 @@ fn build_multi_file_segments(
         // torrent's `file_offsets`, an unselected file's `offset` can exceed
         // `total_bytes`.  Such a file would yield `start > end` and a negative
         // `downloaded_bytes`, producing an illegal SegmentProgressInfo for
-        // Dart.  Skip any file whose start lies beyond the (subset) total.
+        // the host.  Skip any file whose start lies beyond the (subset) total.
         if start >= total_bytes {
             continue;
         }
@@ -2981,7 +2981,7 @@ fn build_piece_scatter_segments(
                 (i as i64 + 1) * chunk - 1
             };
             // 防御:钳制后正常不会发生,但若 chunk 仍致 end < start 则跳过,
-            // 决不向 Dart 发反向区间。(BUG-BT-TINY-TORRENT-SEGMENT)
+            // 决不向宿主发反向区间。(BUG-BT-TINY-TORRENT-SEGMENT)
             if end < start {
                 continue;
             }
@@ -3037,7 +3037,7 @@ fn build_piece_scatter_segments(
             (i as i64 + 1) * chunk - 1
         };
         // 防御:钳制后正常不会发生,但若 chunk 仍致 end < start 则跳过,
-        // 决不向 Dart 发反向区间。(BUG-BT-TINY-TORRENT-SEGMENT)
+        // 决不向宿主发反向区间。(BUG-BT-TINY-TORRENT-SEGMENT)
         if end < start {
             continue;
         }
@@ -4175,7 +4175,7 @@ async fn bt_download_inner(p: BtInnerParams) -> Result<(), DownloadError> {
     );
 
     // -----------------------------------------------------------------------
-    // Phase 3.5: Send file list to Dart and wait for user file selection.
+    // Phase 3.5: Send file list to the host and wait for user file selection.
     // -----------------------------------------------------------------------
 
     // Count files for potential fallback (select-all).
@@ -4200,7 +4200,7 @@ async fn bt_download_inner(p: BtInnerParams) -> Result<(), DownloadError> {
     //    No dialog shown.
     //
     // B) No pre-selection (first-time magnet link with no prior choice):
-    //    Send BtFilesInfo to Dart so the file-selection dialog is shown.
+    //    Send BtFilesInfo to the host so the file-selection dialog is shown.
     //    Persist the confirmed selection to DB so future resumes use Path A.
     //    Poll until the user confirms or the task is cancelled.
     // -----------------------------------------------------------------------
@@ -4243,7 +4243,7 @@ async fn bt_download_inner(p: BtInnerParams) -> Result<(), DownloadError> {
         );
         pre_selected_indices
     } else {
-        // Path B — no pre-selection: build file list and send to Dart.
+        // Path B — no pre-selection: build file list and send to the host.
         // Filter out BEP-47 padding files — they are an implementation detail
         // and must not be shown to the user.  We keep the true meta index
         // (idx from enumerate) so that the indices forwarded to
@@ -4328,7 +4328,7 @@ async fn bt_download_inner(p: BtInnerParams) -> Result<(), DownloadError> {
         );
 
         // `timeout: None` 保留现状"无限等待"语义——由 HostSelection 的具体
-        // 实现(桌面 GUI 场景为 `RinfHostSelection`)决定是否在内部包一个
+        // 实现(各宿主 daemon 内的 HostSelection 实现)决定是否在内部包一个
         // 较长但有限的超时,engine 侧不臆断产品行为。
         let outcome = selector.select_bt_files(&task_id, &bt_files, None).await;
         match &outcome {
@@ -4413,7 +4413,7 @@ async fn bt_download_inner(p: BtInnerParams) -> Result<(), DownloadError> {
         );
     }
 
-    // [-1] is the sentinel sent by Dart when the user explicitly cancels the
+    // [-1] is the sentinel sent by the client when the user explicitly cancels the
     // file selection dialog.  Pause the task (status=2) so the user can
     // resume it later and pick files again, rather than leaving it in an
     // ambiguous state or marking it as error.
@@ -4431,7 +4431,7 @@ async fn bt_download_inner(p: BtInnerParams) -> Result<(), DownloadError> {
         // Drop the unconfirmed handle before declaring the task paused.
         shared_bt.delete_task(&task_id, false).await?;
         db.update_task_status(&task_id, STATUS_PAUSED, "").await?;
-        // Notify Dart so the UI immediately shows "Paused".
+        // Notify the host so the UI immediately shows "Paused".
         if progress_tx
             .send(ProgressUpdate {
                 task_id: task_id.clone(),
@@ -4650,7 +4650,7 @@ async fn bt_download_inner(p: BtInnerParams) -> Result<(), DownloadError> {
     db.update_task_status(&task_id, STATUS_DOWNLOADING, "")
         .await?;
 
-    // Notify Dart of the transition to "downloading" with resolved info
+    // Notify the host of the transition to "downloading" with resolved info
     let init_progress = stats.progress_bytes as i64;
     let init_pieces = stats
         .live

@@ -624,8 +624,8 @@ pub trait ScriptRuntime: Send + Sync {
     );
 
     /// 供 off-actor worker `spawn` 用的 tokio `Handle`（专用 multi_thread runtime）。
-    /// **禁止裸 `tokio::spawn`**——那会把 resolve future 落到 hub 的 current_thread
-    /// 唯一线程上、冻结全命令面。
+    /// **禁止裸 `tokio::spawn`**——那可能把 resolve future 落到宿主的
+    /// current_thread runtime 唯一线程上、冻结全命令面。
     fn spawn_handle(&self) -> tokio::runtime::Handle;
 }
 

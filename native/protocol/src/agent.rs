@@ -150,8 +150,7 @@ fn default_true() -> bool {
 }
 
 /// 当前账户资料与套餐快照（`GET /me`）。FluxCloud 把用户字段平铺在顶层，
-/// `entitlements` / `currentPlan` / `purchaseCreditMinor` 为同级字段（与 Flutter
-/// `CloudProfile.fromJson` 一致），因此 `user` 用 `flatten` 映射。
+/// `entitlements` / `currentPlan` / `purchaseCreditMinor` 为同级字段，因此 `user` 用 `flatten` 映射。
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -1244,7 +1243,7 @@ pub struct UpdateStatusDto {
 /// 偏好键：自定义分类列表（JSON 字符串或数组，与 Flutter `custom_categories` 同形）。
 pub const CUSTOM_CATEGORIES_PREF_KEY: &str = "custom_categories";
 
-/// 自定义分类（与 `lib/src/models/custom_category.dart` 同 JSON 形状）。
+/// 自定义分类（保留旧客户端持久化的 JSON 形状）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -1283,7 +1282,7 @@ fn default_category_visible() -> bool {
 }
 
 impl CustomCategoryDto {
-    /// 内置分类基线（与 Flutter `CustomCategory.builtinDefaults` 同序同扩展名）。
+    /// 内置分类基线（原生 Android `Category.BUILTIN` / iOS `TaskCategory.builtin` 同序同扩展名镜像）。
     #[must_use]
     pub fn builtin_defaults() -> Vec<Self> {
         let make = |id: &str, icon: &str, exts: &[&str], position: i64| Self {
@@ -1447,7 +1446,7 @@ mod cloud_profile_tests {
 
     use super::CloudProfile;
 
-    /// FluxCloud `GET /me` 把用户字段平铺在顶层（同 Flutter `CloudProfile.fromJson`）。
+    /// FluxCloud `GET /me` 把用户字段平铺在顶层。
     #[test]
     fn profile_parses_flat_me_payload() {
         let profile: CloudProfile = serde_json::from_value(json!({

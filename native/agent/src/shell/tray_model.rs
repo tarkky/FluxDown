@@ -103,7 +103,7 @@ fn build(translator: &Translator, inputs: &Inputs) -> TrayModel {
     }
 }
 
-/// `mm:ss`，与桌面状态栏 / Flutter `ShutdownService.remainingText` 一致。
+/// `mm:ss`，与 GPUI `crates/app/src/power.rs::format_remaining` 一致。
 fn format_remaining(total_secs: u64) -> String {
     format!("{:02}:{:02}", total_secs / 60, total_secs % 60)
 }

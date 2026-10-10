@@ -39,7 +39,7 @@ impl CategoryIndex {
                 let matcher = match (dto.builtin_type.as_deref(), dto.match_mode.as_str()) {
                     (Some("all"), _) => Matcher::All,
                     (Some("other"), _) => Matcher::Other,
-                    // 与 Flutter `CustomCategory.matches` 及 agent 分类目录解析一致：正则不区分
+                    // 与 agent 分类目录解析一致：正则不区分
                     // 大小写，空模式不匹配（Rust 空正则会匹配一切）。
                     (_, "regex") => Matcher::Regex(
                         (!dto.regex_pattern.is_empty())

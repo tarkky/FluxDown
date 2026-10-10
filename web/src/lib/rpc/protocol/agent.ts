@@ -405,7 +405,7 @@ export interface AgentPreferencesDto {
 /** 偏好键：自定义分类列表。 */
 export const CUSTOM_CATEGORIES_PREF_KEY = 'custom_categories';
 
-/** 自定义分类（与 Flutter `custom_categories` 同 JSON 形状）。 */
+/** 自定义分类（沿用 `custom_categories` 持久化 JSON 形状）。 */
 export interface CustomCategoryDto {
   id: string;
   name: string;

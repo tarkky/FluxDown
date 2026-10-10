@@ -100,7 +100,7 @@ function ThemeCard({ label, colors, selected, disabled, onSelect }: { label: str
   )
 }
 
-/** 只展示可放进当前明暗槽位的内置预设（同 GPUI / Flutter `_ThemeSelector`）。 */
+/** 只展示可放进当前明暗槽位的内置预设（与 GPUI 主题选择器一致）。 */
 function ThemeCards({ disabled }: { disabled: boolean }) {
   const t = useT()
   const { mode, prefs } = useTheme()

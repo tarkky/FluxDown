@@ -1,5 +1,4 @@
-//! 分类新增 / 编辑对话框：字段、校验与保存语义与
-//! `lib/src/widgets/category_edit_dialog.dart` 逐条对齐。
+//! 分类新增 / 编辑对话框：字段、校验与保存。
 
 use fluxdown_ui_components::{
     ControlExt as _, DialogIntent, category_icon, dialog_scroll_body, dialog_title, field_error,
@@ -23,10 +22,10 @@ use super::categories::{CategoryEntry, read_categories, write_categories};
 use crate::store::SettingsStore;
 use crate::ui::{danger_ghost_button, dialog_footer};
 
-/// 图标选择器可选的 Dart `CategoryIcon` 名（持久化的 wire 值，顺序即网格顺序）。
+/// 图标选择器可选的图标名（持久化的 wire 值，顺序即网格顺序）。
 ///
 /// 渲染统一经 `fluxdown_ui_components::category_icon` 映射，与下载侧栏分类子项
-/// 显示一致（存储值不变，Flutter 端仍按原名渲染）。
+/// 显示一致（存储值保留原始图标名）。
 pub(crate) const CATEGORY_ICONS: &[&str] = &[
     "folders",
     "film",

@@ -80,7 +80,6 @@ http = "1.4.0"
 plugins = ["dep:rquickjs", "dep:zip"]
 # 组件托管安装（ffmpeg 下载/解压）；desktop/server 开启，mobile/CLI 关闭。
 components = ["dep:zip"]
-# 本地设备互联的引擎数据库存储后端（`link::DbLinkStorage`）。协议本体在独立的
-# `fluxdown_link` crate；desktop hub 与 headless server 开启，mobile（Android/iOS）关闭
-# ——mDNS 在移动端需原生 NsdManager/Bonjour 权限。
+# 冻结的 native/server 使用的引擎数据库存储后端（`link::DbLinkStorage`）。
+# 当前 agent 的互联状态独立持久化；保留此 feature 以维持旧 server 的源码契约。
 link = ["dep:fluxdown_link"]

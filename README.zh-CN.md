@@ -14,7 +14,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20NAS%20%7C%20Android-8b5cf6?style=flat-square)](#安装)
 [![Rust](https://img.shields.io/badge/engine-Rust-f74c00?style=flat-square&logo=rust)](native/engine)
 [![GPUI](https://img.shields.io/badge/desktop-GPUI-f74c00?style=flat-square&logo=rust)](crates/app)
-[![Flutter](https://img.shields.io/badge/mobile-Flutter-02569B?style=flat-square&logo=flutter)](lib)
+[![Android](https://img.shields.io/badge/mobile-Kotlin%20%2B%20Swift-02569B?style=flat-square)](mobile)
 [![MCP Server](https://glama.ai/mcp/servers/zerx-lab/FluxDown/badges/score.svg)](https://glama.ai/mcp/servers/zerx-lab/FluxDown)
 
 [![Awesome Rust](https://img.shields.io/badge/Awesome-Rust-orange?logo=rust&style=flat-square)](https://github.com/rust-unofficial/awesome-rust#utilities)
@@ -38,7 +38,7 @@
 
 - **动态下载加速** —— Rust + Tokio 引擎，自适应分段与慢速分段接管
 - **多协议支持** —— HTTP/HTTPS、FTP、BitTorrent、eD2K、HLS 与 DASH 流媒体
-- **一套引擎，多种客户端** —— 原生 GPUI 桌面、Flutter Android 应用、React Web 管理界面与 CLI
+- **一套引擎，多种客户端** —— 原生 GPUI 桌面、Kotlin Android 与 SwiftUI iOS 应用、React Web 管理界面与 CLI
 - **浏览器集成** —— Chrome / Edge / Firefox 扩展，三层下载拦截引擎，另有用户脚本
 - **AI 智能体就绪** —— 内置 MCP（Model Context Protocol）服务器，Claude、Cursor 等 AI 客户端可直接管理下载
 - **自动化与远程管理** —— RSS 订阅、定时队列、Webhook、插件，以及可选的 FluxCloud 设备协同
@@ -180,7 +180,7 @@ MCP 层实现在 [`native/api/src/mcp.rs`](native/api/src/mcp.rs)，与 REST 管
 
 ## 架构
 
-**一套 Rust 下载引擎，多个宿主与客户端。** 当前桌面发行物使用 GPUI，而非 Flutter。桌面链路为 `fluxdown-desktop → fluxdown-agent → fluxdownd`；无头部署复用 agent 与 daemon，提供 React Web 管理界面。Flutter 保留为移动客户端，通过 [Rinf](https://rinf.cunarist.org) 连接 `hub` 宿主。
+**一套 Rust 下载引擎，多个宿主与客户端。** 桌面链路为 `fluxdown-desktop → fluxdown-agent → fluxdownd`；无头部署复用 agent 与 daemon，提供 React Web 管理界面。原生 Android/iOS 经 UniFFI（`native/mobile`）接入，本机下载复用进程内 agent + daemon，远端主机走 `/rpc`。
 
 ```mermaid
 flowchart TD
@@ -191,8 +191,8 @@ flowchart TD
     CLI["fluxdown CLI"] -->|"HTTP API"| AGENT
     AGENT -->|"带鉴权的 JSON-RPC"| DAEMON["fluxdownd — 下载核心"]
     DAEMON --> ENGINE["fluxdown_engine"]
-    MOBILE["Flutter 移动端"] -->|"Rinf 信号"| HUB["hub — 移动端宿主"]
-    HUB --> ENGINE["fluxdown_engine"]
+    MOBILE["原生 Android / iOS"] -->|"UniFFI"| CORE["fluxdown_mobile"]
+    CORE -->|"进程内或远端"| AGENT
     LOCAL["fluxdown add --local"] --> ENGINE
     ENGINE --> PROTOCOLS["HTTP/HTTPS, FTP, BitTorrent, eD2K, HLS, DASH"]
     ENGINE --> DB[("SQLite / PostgreSQL")]
@@ -209,7 +209,7 @@ flowchart TD
 | agent / daemon | UI 网关与无头宿主 / 下载核心 | [`native/agent/`](native/agent)、[`native/daemon/`](native/daemon) |
 | 共用协议 / HTTP API | JSON-RPC DTO / REST、aria2、MCP 适配 | [`native/protocol/`](native/protocol)、[`native/api/`](native/api) |
 | 下载引擎 | Rust + Tokio，不依赖 UI 或 FFI | [`native/engine/`](native/engine) |
-| 移动 UI / 宿主 | Flutter + shadcn_ui / Rinf | [`lib/`](lib)、[`native/hub/`](native/hub) |
+| 移动 UI / 桥接 | Kotlin + Jetpack Compose / SwiftUI + UniFFI | [`mobile/Android/`](mobile/Android)、[`mobile/FluxDown/`](mobile/FluxDown)、[`native/mobile/`](native/mobile) |
 | Web 管理界面 | React + TypeScript + Vite | [`web/`](web) |
 | CLI | HTTP 客户端或内嵌引擎 | [`native/cli/`](native/cli) |
 | 浏览器集成 | WXT + TypeScript、Native Messaging、用户脚本 | [`fluxDown/`](fluxDown)、[`native/nmh/`](native/nmh)、[`userscript/`](userscript) |
@@ -217,7 +217,7 @@ flowchart TD
 
 ## 从源码构建
 
-首先安装 [Rust 工具链](https://www.rust-lang.org/tools/install) 与平台原生构建工具（Windows 使用 MSVC，macOS 使用 Xcode 命令行工具）。Linux 桌面构建还需要图形、音频与托盘开发库，维护中的 Ubuntu 依赖列表见 [CI 配置](.github/workflows/ci.yml)。Web UI 需要 [Bun](https://bun.sh)；Flutter 与 Rinf **仅移动端需要**，GPUI 桌面无需安装。
+首先安装 [Rust 工具链](https://www.rust-lang.org/tools/install) 与平台原生构建工具（Windows 使用 MSVC，macOS 使用 Xcode 命令行工具）。Linux 桌面构建还需要图形、音频与托盘开发库，维护中的 Ubuntu 依赖列表见 [CI 配置](.github/workflows/ci.yml)。Web UI 需要 [Bun](https://bun.sh)；Android 使用 Android Studio 的 JBR、Android SDK/NDK 与 `cargo-ndk`，iOS 使用 Xcode。
 
 ```shell
 # 克隆开发分支（main = 日常开发，stable = 稳定版本）
@@ -261,19 +261,19 @@ cargo build -p fluxdown_cli
 cargo run -p fluxdown_cli -- ping
 ```
 
-### 移动端（Flutter）
+### 原生移动端
 
-安装 [Flutter SDK](https://docs.flutter.dev/get-started/install) 与 Android SDK（iOS 开发则需要 Xcode）。
+Android 工程在 `mobile/Android`，iOS 工程在 `mobile/FluxDown`；共同使用 `native/mobile` 的 Rust 核心与 `assets/i18n` 共享翻译。
 
 ```shell
-cargo install rinf_cli
-flutter pub get
-rinf gen
-flutter run -d "<mobile-device-id>"
-flutter build apk --release
+# Android：JAVA_HOME 指向 Android Studio 自带 JBR
+(cd mobile/Android && ./gradlew :core:testDebugUnitTest :bridge:testDebugUnitTest :app:assembleDebug)
+# iOS：从仓库根目录执行
+mobile/FluxDown/scripts/build-core.sh
+(cd mobile/FluxDown && xcodebuild build -project FluxDown.xcodeproj -scheme FluxDown -destination 'generic/platform=iOS Simulator')
 ```
 
-CI 发布 Android APK。仓库保留 iOS 源码，但当前没有 iOS 发布 job。Flutter 桌面 runner 已不在桌面构建链路中。
+Android 正式发布使用原生工程的 `ANDROID_NATIVE_*` 签名，**不能覆盖安装旧 Flutter APK**；卸载旧应用前请先备份需要的数据。旧 Flutter SDK、Rinf 与 hub 不再是构建依赖。共享 assets、PC/Web 现有旧数据与主题升级兼容、官网旧主题编辑器继续保留。
 
 <details>
 <summary><b>运行测试</b></summary>
@@ -284,7 +284,7 @@ cargo test -p fluxdown_api           # HTTP / aria2 / MCP 契约
 cargo test -p fluxdown_agent         # 网关 / 服务器
 cargo test -p fluxdown_cli           # CLI
 cd web && bun test && cd ..          # Web UI
-flutter test                        # 移动端 Dart 测试
+cargo test -p fluxdown_mobile        # 原生移动端共享核心
 ```
 
 </details>
@@ -299,7 +299,6 @@ flutter test                        # 移动端 Dart 测试
 ```shell
 cargo fmt --check
 cargo clippy --workspace --exclude fluxdown_server --all-targets -- -D warnings
-flutter analyze                     # 修改移动端 Dart 代码时
 ```
 
 完整流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。

@@ -57,7 +57,7 @@ pub(crate) async fn component_mirror_base(db: &crate::db::Db) -> String {
 }
 
 /// 组件生效路径的来源。ffmpeg / yt-dlp 共用；`as_str` 为稳定 wire 字符串
-/// （跨 hub 信号 / server JSON / Dart 徽章共用）。
+/// （各宿主 API 与 UI 徽章共用）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentSource {
     /// 用户手动指定路径（config）。
@@ -71,7 +71,7 @@ pub enum ComponentSource {
 }
 
 impl ComponentSource {
-    /// 稳定的 wire 字符串（跨 hub 信号 / server JSON 共用）。
+    /// 稳定的 wire 字符串（各宿主 API 共用）。
     pub fn as_str(self) -> &'static str {
         match self {
             ComponentSource::Manual => "manual",

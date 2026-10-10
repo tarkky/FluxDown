@@ -158,7 +158,7 @@ source_code_url: https://github.com/zerx-lab/FluxDown
 
 `stargazers_count` / `updated_at` / `archived` / `current_release` / `commit_history` 由 `make update_metadata` 自动写入，**投稿时一律不要写**。同时删除所有注释与未使用的可选字段（PR 模板第 6 条）。
 
-`demo_url` 为可选字段。仓库里 `native/server/src/host.rs` 有 `demo_guard(demo_url, url)` 演示模式守卫，即**服务端原生支持公开 demo 实例**。若愿意上线 demo，可加 `demo_url:` 一行 —— PR 模板第 5 条要求必须是可交互 demo（不能是演示视频），且若需登录必须直接给出凭据。**不上 demo 不影响准入。**
+`demo_url` 为可选字段。当前 headless 的演示模式由 agent 的 `FLUXDOWN_DEMO` / `FLUXDOWN_DEMO_URL` 配置（见 `.omp/knowledge/hosts-and-api.md`），不再以冻结的 `native/server` 为部署入口。若上线 demo，提交前按当前实例核实可交互性及所需凭据；**不上 demo 不影响准入。**
 
 ### CONTRIBUTING 的硬性要求（逐条核对）
 
@@ -184,14 +184,14 @@ CONTRIBUTING → *What does not qualify* 中有两条正对 FluxDown：
 
 1. > Software that is a **desktop**, mobile, or command-line application, which relies on a separate file synchronisation/server program
 
-   FluxDown 主线是 Flutter 桌面应用。**PR 必须把主体定位在 `fluxdown_server`**：一个 headless 的 Rust 服务端，自带 Web UI（端口 17800），可独立部署、无需桌面客户端。桌面 App 是可选客户端而非前提。
+   FluxDown PC 使用 GPUI，移动端为原生 Android/iOS。**此类 PR 应定位在 `fluxdown-agent --server` + `fluxdownd`**：headless Rust 服务链路自带 Web UI（端口 17800），可独立部署、无需桌面客户端。桌面 App 是可选客户端而非前提。
 
 2. > Software contributions that merely **port an existing application to another system** (e.g., Dockerization)
 
    不适用 —— FluxDown 是自研引擎，非既有应用的容器化封装。可主动说明。
 
 **建议的 PR 正文骨架（人类改写后使用，勿直接粘贴）**：
-> FluxDown ships a headless server binary (`fluxdown_server`) with a built-in web UI on port 17800, packaged as a multi-arch image (`ghcr.io/zerx-lab/fluxdown-server`, linux/amd64 + linux/arm64). It runs standalone on a NAS or VPS — the desktop app is an optional client, not a requirement. The download engine is written from scratch in Rust/Tokio, not a wrapper around an existing downloader.
+> FluxDown ships a headless service (`fluxdown-agent --server` with `fluxdownd`) with a built-in web UI on port 17800, packaged as a multi-arch image (`ghcr.io/zerx-lab/fluxdown-server`, linux/amd64 + linux/arm64). It runs standalone on a NAS or VPS — the desktop app is an optional client, not a requirement. The download engine is written from scratch in Rust/Tokio, not a wrapper around an existing downloader.
 
 ### 提交入口
 
@@ -918,4 +918,4 @@ FluxDown 目前**没有已发布的 store**，`promotion/casaos/` 只是一份�
 - 上方 ⛔3 提出的补 `v0.0.1` Release 那条思路（方案 A）**已被这次驳回否定**：维护者认定的是 Releases 页上最早的**实际发布时间**，不是 tag 日期。
 - **待办：2026-11-03 之后再重提。** 该日期 = 首个 GitHub Release `website-v0.1.49` / `v0.1.49`（2026-07-03）+ 4 个月。
 - **在此之前不要重提**，短期内二次投递只会招致反感，且仓库有针对性的 canned reply。
-- 重提时：条目 YAML 直接用上方「P0 — awesome-selfhosted」章节的版本（已校过 `tags` / `platforms` 取值），PR 正文务必由人类撰写（该仓 CONTRIBUTING 明文「Machine/LLM-generated contributions … will result in a ban」），并按「不够格风险点」一节把主体定位在 headless 的 `fluxdown_server` 上。
+- 重提时：条目 YAML 使用上方「P0 — awesome-selfhosted」章节并重新核对 `tags` / `platforms`；PR 正文务必由人类撰写（该仓 CONTRIBUTING 明文「Machine/LLM-generated contributions … will result in a ban」），主体定位在 headless 的 `fluxdown-agent --server` + `fluxdownd`。

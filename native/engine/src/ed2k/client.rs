@@ -71,7 +71,7 @@ pub enum Source {
     LowId(u32),
 }
 
-/// 客户端运行期配置（来自 DB config，由 hub 注入）。
+/// 客户端运行期配置（来自 DB config，由引擎宿主注入）。
 #[derive(Debug, Clone, Default)]
 pub struct ClientConfig {
     /// TCP 监听端口（0 = 让 OS 选，登录时报实际绑定端口争取 HighID）。
@@ -174,7 +174,7 @@ impl Ed2kClient {
         }
     }
 
-    /// 注入/更新配置（hub 在启动与 config 变化时调用）。
+    /// 注入/更新配置（引擎宿主在启动与 config 变化时调用）。
     pub fn configure(&self, config: ClientConfig) {
         let mut guard = self.config.lock().unwrap_or_else(|poison| {
             log_error!(

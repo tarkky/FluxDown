@@ -1,8 +1,8 @@
 //! FluxCloud HTTPS 客户端、并发 401 单飞刷新与一次重放。
 //!
 //! 服务地址：`default_base_url` 由启动环境固定；仅调试构建允许经
-//! [`CloudClient::set_endpoint`] 覆盖（持久化在 agent 私有状态），与 Flutter
-//! `CloudApiConfig` 同一策略——正式包锁定默认地址，避免残留覆盖值指向失效地址。
+//! [`CloudClient::set_endpoint`] 覆盖（持久化在 agent 私有状态；GPUI 账户页同样只在调试构建展示该入口）
+//! ——正式包锁定默认地址，避免残留覆盖值指向失效地址。
 
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -21,7 +21,7 @@ use crate::event_hub::AgentEventHub;
 use crate::http_client::LazyHttpClient;
 use crate::state::{AgentState, CloudCredentials, StateStore};
 
-/// 是否允许运行期覆盖 FluxCloud 地址；与 Flutter `kDebugMode` 门控一致。
+/// 是否允许运行期覆盖 FluxCloud 地址；仅调试构建。
 const ENDPOINT_EDITABLE: bool = cfg!(debug_assertions);
 
 /// 云端连接的 TCP keepalive 探测间隔。

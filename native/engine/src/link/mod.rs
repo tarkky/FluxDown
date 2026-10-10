@@ -2,8 +2,8 @@
 //!
 //! 互联协议本体（身份 / 配对 / mDNS / 传输）住在独立的 `fluxdown_link` crate，与宿主无关；
 //! 引擎只负责把它的持久化抽象 [`LinkStorage`] 落到 `config` 表（身份私钥 seed）与
-//! `link_devices` 表（已配对名册）。desktop hub 与旧 headless server 用它构造
-//! `LinkManager`。仅 `link` feature 下编译。
+//! `link_devices` 表（已配对名册）。冻结的 `native/server` 用它构造
+//! `LinkManager`；当前 agent 使用独立状态存储。仅 `link` feature 下编译。
 
 use async_trait::async_trait;
 use base64::Engine as _;

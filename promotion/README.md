@@ -11,7 +11,7 @@
 | 开源协议 | ✅ AGPL-3.0（SPDX `AGPL-3.0`） | `LICENSE` |
 | 首个 tag | ✅ v0.0.1 @ 2026-02-10 | git tag |
 | 首个 GitHub **Release** | ⚠️ 2026-07-03（仅 24 天）——见「阻塞项 B」 | GitHub Releases API |
-| headless Web UI | ✅ `fluxdown_server`，端口 17800 | `docker/docker-compose.yml` |
+| headless Web UI | `fluxdown-agent --server` + `fluxdownd`，端口 17800 | `docker/docker-compose.yml`；当前架构见根 README |
 | 公共镜像 | ✅ `ghcr.io/zerx-lab/fluxdown-server`，**多架构 amd64 + arm64** | `release.yml:1678`；GHCR manifest list 实测 |
 | aria2 JSON-RPC | ✅ 覆盖官方 36 方法全集，27 个真实实现 | `native/api/src/aria2.rs:633-670`、`jsonrpc.rs:137-180` |
 | MCP 端点 | ✅ `POST /mcp`，12 个工具，默认仅 `127.0.0.1` + token | `native/api/src/mcp.rs` |
@@ -32,8 +32,8 @@
 | pcqpcq/open-source-android-apps | [#448](https://github.com/pcqpcq/open-source-android-apps/pull/448) | ✅ 已合并（07-27） |
 | rust-unofficial/awesome-rust | [#2672](https://github.com/rust-unofficial/awesome-rust/pull/2672) | ✅ 已合并（07-27） |
 | TaKO8Ki/awesome-alternatives-in-rust | [#148](https://github.com/TaKO8Ki/awesome-alternatives-in-rust/pull/148) | open |
-| Solido/awesome-flutter | [#1055](https://github.com/Solido/awesome-flutter/pull/1055) | open（只改 source.md） |
-| fluttergems/awesome-open-source-flutter-apps | [issue #777](https://github.com/fluttergems/awesome-open-source-flutter-apps/issues/777) | open（Step 1，等分类答复后补 PR） |
+| Solido/awesome-flutter | [#1055](https://github.com/Solido/awesome-flutter/pull/1055) | 历史投稿（当时 open）；Flutter 工程已退役，不再以 Flutter 应用继续投递 |
+| fluttergems/awesome-open-source-flutter-apps | [issue #777](https://github.com/fluttergems/awesome-open-source-flutter-apps/issues/777) | 历史投稿（当时 open）；不再补 Flutter 应用 PR |
 | jaywcjlove/awesome-mac | [#2419](https://github.com/jaywcjlove/awesome-mac/pull/2419) | open（EN/zh/ja/ko 四文件） |
 | offa/android-foss | [#704](https://github.com/offa/android-foss/pull/704) | ✅ 已合并（07-27） |
 | iCHAIT/awesome-macOS | [#950](https://github.com/iCHAIT/awesome-macOS/pull/950) | open |

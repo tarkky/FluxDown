@@ -1,7 +1,7 @@
-//! FluxDown GPUI 客户端对 Flutter 翻译资源的零复制源复用层。
+//! FluxDown GPUI 客户端对公共翻译资源的零复制源复用层。
 //!
 //! `assets/i18n/*.json` 仍是唯一资源目录；构建脚本自动发现并嵌入语言文件。
-//! 查找语义与 Flutter `I18nStore` 一致：locale 精确匹配、主语言匹配、英文
+//! 查找语义：locale 精确匹配、主语言匹配、英文
 //! 键级回退、空值回退以及 `{name}` 占位插值。
 
 use std::{collections::BTreeMap, sync::Arc};
@@ -12,7 +12,7 @@ mod embedded {
     include!(concat!(env!("OUT_DIR"), "/embedded_locales.rs"));
 }
 
-/// Flutter 与 GPUI 共享的最终回退语言。
+/// 公共翻译资源的最终回退语言。
 pub const FALLBACK_LOCALE: &str = "en";
 
 /// 初始桌面 shell 使用的翻译键；完整键集仍可通过字符串访问。
@@ -91,7 +91,7 @@ pub struct I18nCatalog {
 }
 
 impl I18nCatalog {
-    /// 从 Flutter 的嵌入翻译资源构造目录。
+    /// 从嵌入的公共翻译资源构造目录。
     pub fn load_embedded() -> Result<Self, I18nError> {
         Self::from_sources(embedded::EMBEDDED_LOCALES)
     }
@@ -128,7 +128,7 @@ impl I18nCatalog {
         Ok(Self { tables, available })
     }
 
-    /// 可用 locale，顺序与 Flutter 一致：`en`、`zh`，随后按代码排序。
+    /// 可用 locale 顺序：`en`、`zh`，随后按代码排序。
     pub fn available_locales(&self) -> &[String] {
         &self.available
     }
@@ -367,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn flutter_baseline_locales_have_matching_keys() -> Result<(), I18nError> {
+    fn baseline_locales_have_matching_keys() -> Result<(), I18nError> {
         let catalog = I18nCatalog::load_embedded()?;
         let english = catalog
             .tables

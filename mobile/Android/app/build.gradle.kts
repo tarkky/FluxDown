@@ -89,7 +89,12 @@ object Release {
         if (major > 2000 || minor > 99 || patch > 99) {
             throw GradleException("fluxdown.version 超出 versionCode 编码范围（major ≤ 2000，minor / patch ≤ 99）：$versionName")
         }
-        return major * 1_000_000 + minor * 10_000 + patch * 100
+        val code = major * 1_000_000 + minor * 10_000 + patch * 100
+        // Android 要求 versionCode 为正整数；0.0.0 会产出无法覆盖安装任何正式包的 APK。
+        if (code <= 0) {
+            throw GradleException("fluxdown.version 须大于 0.0.0（versionCode 必须为正）：$versionName")
+        }
+        return code
     }
 }
 

@@ -113,7 +113,7 @@ impl ProxyType {
         }
     }
 
-    /// 持久化 wire 值(DB `proxy_type` 列、设置页下拉、Dart/前端协议)。
+    /// 持久化 wire 值(DB `proxy_type` 列、设置页下拉、客户端/wire 协议)。
     /// **与 [`Self::scheme`] 是两条独立通道**,不随 reqwest 的 scheme 变化。
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -1811,7 +1811,7 @@ mod tests {
     }
 
     /// scheme(reqwest URL)与 as_str(持久化 wire 值)必须保持解耦:
-    /// UI 下拉/DB/Dart 侧的 `proxy_type` 恒为 `socks5`,绝不能漂成 `socks5h`。
+    /// UI 下拉/DB/客户端 wire 的 `proxy_type` 恒为 `socks5`,绝不能漂成 `socks5h`。
     #[test]
     fn proxy_type_as_str_is_not_the_reqwest_scheme() {
         assert_eq!(ProxyType::Socks5.as_str(), "socks5");

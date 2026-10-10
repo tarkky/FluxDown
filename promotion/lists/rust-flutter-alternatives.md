@@ -12,7 +12,7 @@
 | 官网 | https://fluxdown.zerx.dev（README 第 19 行的 Website 链接） | `FluxDown/README.md:19` |
 | GitHub 仓库 homepage 字段 | `https://www.fluxdown.com` | `gh api` — 两个域名均实测 HTTP 200 |
 | crates.io | **无 crate**（`crates.io/api/v1/crates/fluxdown` → "crate `fluxdown` does not exist"） | 实测 |
-| 定位 | Rust + Tokio 引擎 / Flutter UI 的多协议下载管理器，开源 IDM 替代 | `FluxDown/README.md:9`、`:29-35` |
+| 定位 | Rust + Tokio 引擎 / GPUI PC / Kotlin Compose Android / SwiftUI iOS 的多协议下载管理器，开源 IDM 替代 | 当前架构见根 `README.md` |
 | aria2 JSON-RPC 兼容 | **真实存在**：`native/api/src/aria2.rs:633-670` 的 `METHOD_NAMES` 共 36 项（33 个 `aria2.*` + `system.multicall/listMethods/listNotifications`），`native/api/src/jsonrpc.rs:139-159` 逐条分发，另有 WS 通知帧 | 已读源码核实，可安全宣称「aria2-compatible JSON-RPC」 |
 
 ---
@@ -23,19 +23,18 @@
 |---|---|---|---|---|---|
 | [rust-unofficial/awesome-rust](https://github.com/rust-unofficial/awesome-rust) | 58.5k | **2026-07-25**（PR #2668 `feat: add gaze`） | ✅ 够格（1002 star > 50 门槛） | 全文未见任何 AI/机器生成 PR 的禁令 | **P0** |
 | [TaKO8Ki/awesome-alternatives-in-rust](https://github.com/TaKO8Ki/awesome-alternatives-in-rust) | 4.1k | **2026-07-13**（PR #146 `Add pgrust`） | ✅ 够格（无 star 门槛，定位就是「Rust 写的现有软件替代品」） | 未见禁令 | **P0** |
-| [fluttergems/awesome-open-source-flutter-apps](https://github.com/fluttergems/awesome-open-source-flutter-apps) | 3.0k | 2026-05-01（PR #757） | ✅ 够格（唯一硬门槛「3 年内有更新」满足） | 未见禁令 | **P1** |
-| [Solido/awesome-flutter](https://github.com/Solido/awesome-flutter) | 60.7k | 2026-04-21（PR #999/#1001/#1010，批量合并） | ✅ 够格（35 star 门槛，FluxDown 1002） | 未见禁令 | **P1** |
+| [fluttergems/awesome-open-source-flutter-apps](https://github.com/fluttergems/awesome-open-source-flutter-apps) | 3.0k（历史） | 2026-05-01（历史 PR #757） | 当前不符：Flutter 工程已退役 | 历史未见禁令 | 不再投递 |
+| [Solido/awesome-flutter](https://github.com/Solido/awesome-flutter) | 60.7k（历史） | 2026-04-21（历史 PR #999/#1001/#1010） | 当前不符：Flutter 工程已退役 | 历史未见禁令 | 不再投递 |
 | [RunaCapital/awesome-oss-alternatives](https://github.com/RunaCapital/awesome-oss-alternatives) | 19.4k | 2025-09-03（PR #243 `Add OpenStatus`），134 open issue 积压 | ❌ **不够格**（收录标准第 3 条要求「private for-profit company」，且对标必须是 SaaS） | 未见禁令 | 不提交 |
 | [GorvGoyl/Clone-Wars](https://github.com/GorvGoyl/Clone-Wars) | 36.3k | **2024-08-06**（PR #255），此后近 2 年零合并 | ⛔ **事实停更**（且 FluxDown 不是「某站点的 clone」） | 未见禁令 | 不提交 |
-| [fluttergems/fluttergems](https://github.com/fluttergems/fluttergems) | 242 | 2026-07-20 | ❌ **品类不符**：只收 pub.dev **package**；app 提交已官方迁至上面的兄弟仓 | 未见禁令 | 不提交（改投兄弟仓） |
+| [fluttergems/fluttergems](https://github.com/fluttergems/fluttergems) | 242（历史） | 2026-07-20（历史） | 品类不符：仅收 pub.dev package，当前项目也已无 Flutter 工程 | 历史未见禁令 | 不提交，也不改投 Flutter 应用目录 |
 
 > **AI-PR 禁令核查方式**：对上述全部 CONTRIBUTING / PR 模板 / README 贡献章节做了 `AI|LLM|ChatGPT|Copilot|AI-generated|machine.generated|bot` 正则全文检索，**零命中**（命中的都是收录条目自身描述里的 "AI"，例如 awesome-rust 的 TabbyML 条目）。即：**目前无一家明文禁止 AI 生成 PR**；但也没有一家明文允许，仍应以人工署名、单条目单 PR 的方式提交。
 
 > **「收录库」vs「收录应用」的判别结论**：FluxDown 是**应用（application）**，不是 crate / package。
 > - awesome-rust 同时收录二者，但分处 `## Applications` 与 `## Libraries` 两个顶层区块 → 必须进 `## Applications`。
 > - awesome-alternatives-in-rust 同样分 `## Applications` / `## Libraries` → 进 `## Applications`。
-> - Solido/awesome-flutter 主体是 package，但设有 `## Open Source Apps` 专区 → 只能进该专区。
-> - fluttergems/fluttergems 是**纯 package 目录**，app 已剥离到 awesome-open-source-flutter-apps → 前者直接排除。
+> - Flutter 相关目录仅保留以下历史调研记录，当前项目不再符合 Flutter 应用品类，不继续投稿或补 PR。
 
 ---
 
@@ -132,7 +131,9 @@ PR 模板（`.github/pull_request_template.md`）全文只有一行勾选项：
 
 ---
 
-## P1-1 · fluttergems/awesome-open-source-flutter-apps
+## 历史调研（已停用，不再投稿）· fluttergems/awesome-open-source-flutter-apps
+
+以下规则和文案仅存档，不能用于当前版本投稿。历史 issue [#777](https://github.com/fluttergems/awesome-open-source-flutter-apps/issues/777) 保留，不再按下面流程补 PR。
 
 **目标文件**：`README.md`
 **提交入口**：**先开 issue**（见下方流程），再 https://github.com/fluttergems/awesome-open-source-flutter-apps/edit/main/README.md
@@ -174,7 +175,9 @@ PR 模板（`.github/pull_request_template.md`）全文只有一行勾选项：
 
 ---
 
-## P1-2 · Solido/awesome-flutter
+## 历史调研（已停用，不再投稿）· Solido/awesome-flutter
+
+以下规则和文案仅存档，不能用于当前版本投稿。历史 PR [#1055](https://github.com/Solido/awesome-flutter/pull/1055) 保留，不再将当前项目宣传为 Flutter 应用。
 
 **目标文件**：**`source.md`（小写，仓库根目录），绝对不要改 `README.md`**
 **提交入口**：https://github.com/Solido/awesome-flutter/edit/master/source.md

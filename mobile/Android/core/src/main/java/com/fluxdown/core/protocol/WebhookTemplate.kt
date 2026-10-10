@@ -32,7 +32,7 @@ object WebhookTemplate {
 
     private val securityRandom = SecureRandom()
 
-    /** `application/x-www-form-urlencoded` 组件编码（Dart `Uri.encodeQueryComponent`）。 */
+    /** `application/x-www-form-urlencoded` 组件编码。 */
     fun formEncode(value: String): String {
         val out = StringBuilder()
         for (b in value.toByteArray(Charsets.UTF_8)) {
@@ -150,7 +150,7 @@ object WebhookTemplate {
         WarnHttp,
     }
 
-    /** HMAC 密钥起点（`whsec_` + 32 位十六进制），与 Dart `generateWebhookSecret` 同形。 */
+    /** HMAC 密钥起点（`whsec_` + 32 位十六进制）。 */
     fun generateSecret(): String {
         val bytes = ByteArray(16).also { securityRandom.nextBytes(it) }
         val hex = StringBuilder("whsec_")

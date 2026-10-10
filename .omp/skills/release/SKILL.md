@@ -45,7 +45,7 @@ gh release list --limit 20
 
 - 同一次 `v*` push 按目录 diff 决定本次打包哪些组件（app / server / cli / mobile / extension），产物全部上传到这一个 `vX.Y.Z` release；未改动的组件不重建，官网自动沿用它上一个完整版本。历史上的 `server-v*` / `cli-v*` / `mobile-v*` / `extension-v*` 组件 release 不再新建，官网仍兼容读取。
 - **扩展发布后无法改版本号**，故 `-rc` tag 跳过 `build-extension`（`changes` 判定 extension=false）。
-- latest：`publish-release` 只在「稳定版 + 桌面端完整 + 最高稳定版本」时标记；Flutter `--build-name` 用剥后缀的 `CLEAN_VERSION`，`APP_VERSION` 保留完整版号。
+- latest：`publish-release` 只在「稳定版 + 桌面端完整 + 最高稳定版本」时标记；Rust `FLUXDOWN_APP_VERSION` 与原生 Android `versionName` 保留完整 tag 版本。
 - **分支模型**：`main` = 开发分支（超集 / 最新），`stable` = 稳定分支（子集）；`stable` 只经合并/cherry-pick `main` 前进。稳定发布前 `git log stable --not main` 必须为空。
 - **CI 分支守卫**（`changes` job 首步）：tag 提交必须在对应分支上——`vX.Y.Z` ∈ `origin/stable`、`vX.Y.Z-rc.N` ∈ `origin/main`，否则整条流水线立即失败（`git merge-base --is-ancestor` 判定）。
 
@@ -103,6 +103,6 @@ gh workflow run release.yml --ref main -f tag="$V" -f component=mobile -f source
 
 - **官网下载 / `/releases/latest`**：永远只给稳定版（`/api/release` 缺省 = stable；下载页从不带 channel）。
 - **预览版**：仅 `/api/release?channel=frontier` 与客户端"更新渠道 = 预览版"可见；预览资产经 `/api/download/<name>?tag=<rc-tag>` 下载。
-- **客户端更新判定**：`native/hub/src/updater.rs` 的 SemVer 比较器（含预发布精度）；渠道存于配置 `update_channel`（桌面/移动）、`web_update_channel`（web SPA）。
+- **客户端更新判定**：桌面/headless 由 `native/agent/src/update/` 承担，使用 protocol 更新状态；原生移动端见 `mobile/Android` 与 `mobile/FluxDown`。Android 正式包用 `ANDROID_NATIVE_*` 签名，不能覆盖旧 Flutter APK，发布说明必须保留换签名安装提示。
 
 细节见根 `AGENTS.md`「git · 分支 · 发布」、`.omp/knowledge/ops.md`「发布与 CI」与 `.github/workflows/release.yml`。

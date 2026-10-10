@@ -1,6 +1,6 @@
 //! CLI 式同进程直接调用 `fluxdown_engine` 的最小可执行证明。
 //!
-//! 不依赖 `hub`/`rinf` 的任何符号,仅 `use fluxdown_engine::*`,构造
+//! 不依赖具体宿主的任何符号，仅 `use fluxdown_engine::*`，构造
 //! `Engine::new(config, Arc::new(NoopSink), Arc::new(NoopSelection))`,对一个
 //! 本地 HTTP 服务器提供的小文件发起一次完整的"创建任务 → 下载 → 完成"流程。
 //!

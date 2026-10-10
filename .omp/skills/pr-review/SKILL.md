@@ -61,7 +61,7 @@ Rust 构建复用主目录 target 免全量编译：worktree 内每条 cargo 命
 - 实际行为是否等于 PR 描述与关联 issue 的诉求；有没有描述外的顺手改动（夹带 = 退回拆分）。
 - 边界与错误路径：空值、超大文件 >2GB、取消/暂停/恢复、重试、并发竞态、状态码转移（见 `.omp/knowledge/engine.md`）。
 - 硬不变式（`AGENTS.md` §4）：actor drain `resolve_rx`/`plugin_retry_rx`、PG 字节列 `BIGINT` + 双 schema + 迁移、子进程 `proc::no_console_window`、anyhow `{e:#}`、BT 只认哨兵、复制链接读 `origin_url`、RSS 无人值守、单写者锁、空闲静默。
-- wire 兼容：protocol DTO/事件改动不破坏 Flutter、Web、原生移动端；严格事件枚举新增要升协议版本。
+- wire 兼容：protocol DTO/事件改动不破坏 GPUI、Web、原生移动端；严格事件枚举新增要升协议版本。
 - 跨平台：Windows/macOS/Linux 路径、权限、编码；移动端 feature 关闭时（`plugins`/`components`）主链路零变化。
 
 ### 性能
@@ -96,7 +96,7 @@ flowchart TD
 
 |级别|判定（满足任一）|处置|
 |---|---|---|
-|**拒绝**（方向）|违反产品决策/红线：为 Flutter `lib/` 新增 UI 功能或修 UI（已暂停）、改动冻结的 `native/server`、新增遥测点或采集下载信息、下载页侧栏独立「分类」分区、与既有功能重复、不该进本项目的范围；架构方向错（绕过 `fluxdown_engine`/protocol 边界、在 UI 里实现引擎逻辑）；可疑/恶意代码|`gh pr comment <N> --body-file -` 说明原因与可接受的替代方向，再 `gh pr close <N>`|
+|**拒绝**（方向）|违反产品决策/红线：恢复已退役的 Flutter/hub 工程、改动冻结的 `native/server`、新增遥测点或采集下载信息、下载页侧栏独立「分类」分区、与既有功能重复、不该进本项目的范围；架构方向错（绕过 `fluxdown_engine`/protocol 边界、在 UI 里实现引擎逻辑）；可疑/恶意代码|`gh pr comment <N> --body-file -` 说明原因与可接受的替代方向，再 `gh pr close <N>`|
 |**退回**（实现）|核心逻辑错误、需重写主体、有多种修法需作者取舍、需作者补信息（复现、平台实测）、安全问题要重设计、夹带无关改动需拆分、修复量超直修阈值|`gh pr review <N> --request-changes --body-file -`，不代修，结束 review|
 |**直修**|PR 方向与主体实现确认正确，问题属机械性或局部：fmt/clippy、与 main 的冲突、缺几条测试、i18n 漏 zh/en、镜像契约漏同步、openapi 未重生成、局部边界 bug、`{e:#}`、`unwrap→?`、漏 `no_console_window`、调试残留、文档坐标|自己修，推回 PR 分支，合并|
 |**建议**（nit）|风格偏好、可选优化，不影响正确性|写进评论，不阻塞合并、不代改|
@@ -126,7 +126,7 @@ flowchart TD
 |`website-v2/`|`cd website-v2 && bun install --frozen-lockfile && bun run test`|
 |`fluxDown/`（扩展）|`cd fluxDown && npm ci && npm run build`|
 |`mobile/Android`|`AGENTS.md` §2 的 gradle 命令|
-|`lib/`（Flutter）|`flutter analyze` + 相关 `flutter test`|
+|`mobile/FluxDown`|`AGENTS.md` §2 的 FluxKit 测试与 Xcode 构建命令|
 
 禁 `cargo test --workspace`（项目禁令）。推送后 CI 会重跑，合并前等它结束（§6）。
 

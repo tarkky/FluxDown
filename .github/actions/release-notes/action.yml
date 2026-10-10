@@ -187,7 +187,7 @@ runs:
         - 区块内只允许 "## " 标题、"### " 分组、"- " 条目三种行首；不用嵌套列表、表格、引用块
         - 分组按需选用（新功能 / 问题修复 / 性能优化 / 注意事项 等），没有内容的分组不要出现
         - 版本号与日期取自 RELEASE_NOTES.md 原有的 "## [x.y.z] - 日期" 行
-        - 专有名词与代码标识（HLS、DASH、aria2、BitTorrent、Rinf、Content-Disposition、`--flag` 等）中英文区块均原样保留
+        - 专有名词与代码标识（HLS、DASH、aria2、BitTorrent、UniFFI、Content-Disposition、`--flag` 等）中英文区块均原样保留
         - 只修改 RELEASE_NOTES.md，不改动任何其他文件
         EOF
         )

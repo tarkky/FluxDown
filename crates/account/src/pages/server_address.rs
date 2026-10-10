@@ -1,5 +1,5 @@
 //! 服务器地址分组（仅调试构建）：FluxCloud 地址输入框 + 恢复默认按钮，
-//! 与 Flutter `_ServerAddressCard` 对齐；失焦/回车提交，成功与否以通知提示。
+//! 失焦/回车提交，成功与否以通知提示。
 
 use fluxdown_protocol::CloudEndpointDto;
 use fluxdown_ui_components::{ControlExt as _, card, input_with_action};

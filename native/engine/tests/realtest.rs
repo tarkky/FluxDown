@@ -9,7 +9,7 @@
 //!   - 完整复用引擎真实代码（BufWriter / fallocate / 拆分协调 / 续传 / 重试）。
 //!
 //! 用法：
-//!   cargo test -p hub --lib realtest -- --ignored --nocapture --test-threads=1
+//!   cargo test -p fluxdown_engine --test realtest -- --ignored --nocapture --test-threads=1
 //!
 //! 默认 `#[ignore]`（绑定端口 + 略慢），需显式 `--ignored` 运行。
 

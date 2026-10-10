@@ -1,7 +1,7 @@
 // 分类保存目录名净化与拼接（纯函数，无 i18n / 传输依赖）。
 //
-// 桌面镜像：`lib/src/models/custom_category.dart` 的 sanitizeCategoryDirName /
-// categoryDirUnder，以及 `crates/settings/src/sections/categories.rs` 同名函数。
+// 桌面镜像：`crates/settings/src/sections/categories.rs` 的 sanitizeCategoryDirName /
+// categoryDirUnder 同名函数。
 // 同一台机器上桌面与 Web 一键出来的目录必须逐字一致，改一处就要改另一处。
 
 // 控制字符是有意匹配的：文件系统不接受它们，与桌面同规剔除。

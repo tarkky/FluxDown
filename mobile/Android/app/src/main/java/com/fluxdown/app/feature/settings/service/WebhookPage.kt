@@ -511,7 +511,7 @@ private class EditorForm(seed: WebhookEndpoint, val isNew: Boolean) {
         headers += HeaderRow(headerSeq++, "", "")
     }
 
-    /** 草稿 → 模型（与 Dart `_draft` 同序同规则）。 */
+    /** 草稿 → 模型。 */
     fun buildDraft(): WebhookEndpoint {
         val map = LinkedHashMap<String, String>()
         for (row in headers) {

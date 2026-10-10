@@ -202,7 +202,7 @@ nonisolated func hostOrNull(_ url: String) -> String? {
 nonisolated let threadPresets = [4, 8, 16, 32, 64]
 nonisolated let maxThreads = 256
 
-/// 预设 UA（key → UA）。版本基准与桌面端 / Flutter 一致。
+/// 预设 UA（key → UA）。版本基准与 GPUI 桌面端 / Web 一致。
 nonisolated let taskUaPresets: [(key: String, value: String)] = [
     ("chrome", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"),
     ("firefox", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0"),
@@ -269,7 +269,7 @@ nonisolated func manualProxyUrl(_ config: [String: String]) -> String {
     return out + host + ":" + String(port)
 }
 
-/// Dart `Uri.encodeComponent`：除 `A-Za-z0-9-_.!~*'()` 外全部按 UTF-8 百分号编码。
+/// URI 组件编码：除 `A-Za-z0-9-_.!~*'()` 外全部按 UTF-8 百分号编码。
 nonisolated func encodeComponent(_ value: String) -> String {
     let hex = Array("0123456789ABCDEF")
     let safe = Set("-_.!~*'()")

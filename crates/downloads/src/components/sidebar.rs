@@ -508,7 +508,7 @@ impl DownloadView {
         self.folder_motion.amount(status, progress)
     }
 
-    /// 状态项的显示文案：与 Flutter 桌面端 `widgets/sidebar.dart::_statusLabel` 同源。
+    /// 状态项的显示文案。
     fn folder_label(&self, status: DownloadStatusFilter) -> SharedString {
         match status {
             DownloadStatusFilter::All => self.strings.status_all.clone(),

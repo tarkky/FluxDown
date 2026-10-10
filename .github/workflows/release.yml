@@ -78,9 +78,9 @@ jobs:
   #   crates/**              → GPUI 桌面客户端（app）
   #   native/server/**       → 已冻结的旧 headless 宿主，不再触发任何构建
   #   native/engine/**       → 桌面客户端 + 服务器 + 移动端（共享下载引擎）
-  #   lib/**、pubspec.*、native/hub/** → 仅移动端（Flutter 只剩 Android；桌面端已由 GPUI 替换）
+  #   native/mobile/**、mobile/Android/** → 原生 Android 移动端资产
   #   docker/**              → 服务器（部署文件变更需重发镜像）
-  #   android/**、lib/src/mobile/** → 移动端资产（Android APK）
+  #   mobile/FluxDown/**     → 原生 iOS（独立走 ios-testflight.yml）
   #   website/**             → 官网（独立走 deploy-website.yml 部署，不发 release）
   #   docs/**、*.md          → 纯文档，不触发任何构建
   #   其余任何路径            → 桌面客户端（app）
@@ -279,25 +279,24 @@ jobs:
                 native/cli/*)        CLI=true ;;
                 native/api/*)        APP=true; SERVER=true; CLI=true; MOBILE=true ;;
                 native/protocol/*)   APP=true; SERVER=true; CLI=true; MOBILE=true ;;
-                # hub（Android）在所有目标上无条件依赖 engine-protocol
+                # 原生移动端经 agent/daemon 依赖 engine-protocol
                 native/engine-protocol/*) APP=true; SERVER=true; MOBILE=true ;;
                 # 服务器 = fluxdown-agent --server + fluxdownd；桌面 = fluxdown-desktop + 同一对进程
-                native/daemon/*|native/agent/*) APP=true; SERVER=true ;;
+                native/daemon/*|native/agent/*) APP=true; SERVER=true; MOBILE=true ;;
                 native/link/*)       APP=true; SERVER=true; MOBILE=true ;;
-                # Flutter 宿主只剩 Android
-                native/hub/*)        MOBILE=true ;;
+                native/mobile/*)     MOBILE=true ;;
                 # GPUI 桌面客户端
                 crates/*)            APP=true ;;
                 native/engine/*)     APP=true; SERVER=true; MOBILE=true; CLI=true; ENGINE=true ;;
+                # 引擎与 agent 共用的诊断日志文件：消费者同引擎
+                native/logfile/*)    APP=true; SERVER=true; MOBILE=true; CLI=true; ENGINE=true ;;
                 Cargo.toml|Cargo.lock|.cargo/*) APP=true; SERVER=true; MOBILE=true; CLI=true; ENGINE=true ;;
                 .dockerignore)       SERVER=true ;;
                 docker/*)            SERVER=true ;;
                 packaging/*|installer/*) APP=true; SERVER=true ;;
-                android/*)           MOBILE=true ;;
-                lib/src/mobile/*)    MOBILE=true ;;
-                # Flutter Dart 代码与依赖只影响移动端
-                lib/*)               MOBILE=true ;;
-                pubspec.yaml|pubspec.lock) MOBILE=true ;;
+                mobile/Android/*)    MOBILE=true ;;
+                mobile/FluxDown/*) ;;
+                .github/workflows/release.yml) APP=true; SERVER=true; MOBILE=true; CLI=true; ENGINE=true ;;
                 # Web SPA 构建期引用共享文案与 GPUI 主题解析器（web/vite.config.ts 别名）
                 assets/i18n/*)       APP=true; MOBILE=true; SERVER=true ;;
                 website-v2/src/lib/gpui-theme/*) SERVER=true ;;
@@ -1095,45 +1094,32 @@ jobs:
           path: build/installer/FluxDown-*-macos-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
 
-  # ── 并行 Job 4b: 构建 Android APK（覆盖常用硬件 ABI + 通用包）──
-  # 触发条件：下载引擎（native/engine）或移动端代码（android/**、lib/src/mobile/**、
-  # 共享 Dart 代码）变更。Rinf 经 cargokit 在 flutter build apk 期间为各 ABI 编译 Rust cdylib。
+  # ── 并行 Job 4b: 原生 Android 签名 APK（各 ABI + 通用包）──
+  # 与手动打包共用 package.sh / ANDROID_NATIVE_*；签名不兼容旧 Flutter APK，不能覆盖安装。
+  # 发布资产继续使用 android-<abi> 命名，保留下载消费者与统一 release 的契约。
   build-android:
     name: Build Android APK
-    runs-on: ubuntu-latest
+    # cargo-ndk 预编译包需要 GLIBC 2.39。
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     needs: [changes, verify-engine]
     if: needs.changes.outputs.mobile == 'true'
+    env:
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "10"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           ref: ${{ needs.changes.outputs.source }}
 
-      - name: Get version from tag
-        id: version
-        run: |
-          V="${{ needs.changes.outputs.tag }}"; V="${V#v}"
-          echo "VERSION=$V" >> "$GITHUB_OUTPUT"
-          echo "CLEAN_VERSION=${V%%-*}" >> "$GITHUB_OUTPUT"
-
-      # ── JDK 17（Android Gradle Plugin 要求）──
-      - name: Setup JDK 17
+      - name: Setup JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
-      # ── Android SDK / NDK（Flutter 构建时需要）──
-      # packages 必须显式指定：action 默认值 "tools platform-tools" 里的 legacy
-      # `tools` 包已从 Google SDK 仓库下架，sdkmanager 会以 exit 1 失败。
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
-
-      # ── Rust toolchain + Android 目标三元组（cargokit 编译各 ABI 的 cdylib）──
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -1142,108 +1128,45 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
+          key: android-package
           cache-on-failure: true
 
-      - name: Cache Rinf CLI
-        id: cache-rinf
-        uses: actions/cache@v4
+      - uses: taiki-e/install-action@v2
         with:
-          path: ~/.cargo/bin/rinf
-          key: rinf-cli-${{ runner.os }}-x64-8.9.0
+          tool: cargo-ndk
 
-      # ── Flutter SDK ──
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      - name: Flutter version info
-        run: flutter --version
-
-      - name: Install Flutter dependencies
-        run: flutter pub get
-
-      # ── Rinf code generation ──
-      - name: Install Rinf CLI
-        if: steps.cache-rinf.outputs.cache-hit != 'true'
-        shell: bash
+      - name: Decode signing keystore
         env:
-          CARGO_HTTP_MULTIPLEXING: "false"
-          CARGO_NET_RETRY: "10"
+          ANDROID_NATIVE_KEYSTORE_BASE64: ${{ secrets.ANDROID_NATIVE_KEYSTORE_BASE64 }}
         run: |
-          for i in 1 2 3; do
-            cargo install rinf_cli@8.9.0 && exit 0
-            echo "cargo install failed (attempt $i), retrying in 15s..."
-            sleep 15
-          done
-          exit 1
-
-      - name: Generate Rinf bindings
-        run: rinf gen
-
-      # ── Release 签名密钥（可选）──
-      # 提供 ANDROID_KEYSTORE_BASE64 等 secrets 时生成正式签名 key.properties，
-      # 否则 android/app/build.gradle.kts 自动回退 debug 签名，构建不中断。
-      - name: Configure release signing
-        shell: bash
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-        run: |
-          # secrets 不能用于 step 级 if，改为运行时判空：无密钥则跳过，gradle 回退 debug 签名。
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "::warning::ANDROID_KEYSTORE_BASE64 未配置 — 使用 debug 签名构建 APK（仅供测试，不可上架）"
-            exit 0
+          if [ -z "$ANDROID_NATIVE_KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_NATIVE_KEYSTORE_BASE64 未配置"
+            exit 1
           fi
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
-          cat > android/key.properties <<EOF
-          storeFile=upload-keystore.jks
-          keyAlias=${ANDROID_KEY_ALIAS}
-          keyPassword=${ANDROID_KEY_PASSWORD}
-          storePassword=${ANDROID_STORE_PASSWORD}
-          EOF
-          echo "Release signing configured"
+          umask 077
+          echo "$ANDROID_NATIVE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
 
-      # ── Build：按 ABI 拆分（arm64-v8a / armeabi-v7a / x86_64）+ 通用包 ──
-      # split-per-abi 产出各硬件专属小体积包；universal 供未知 ABI/手动分发兜底。
-      # versionCode 由语义版本派生（major*1000000 + minor*10000 + patch*100），
-      # 保证覆盖安装（应用内更新）时 versionCode 单调递增。
-      - name: Derive Android versionCode
-        id: vercode
+      # SDK / NDK 使用 runner 预装版本，与 android-package.yml 一致。
+      - name: Build, sign and verify
+        env:
+          FLUXDOWN_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_NATIVE_KEYSTORE_PASSWORD }}
+          FLUXDOWN_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_NATIVE_KEY_ALIAS }}
+          FLUXDOWN_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_NATIVE_KEY_PASSWORD }}
+          FLUXCLOUD_BASE_URL: ${{ secrets.FLUXCLOUD_BASE_URL }}
+          VERSION: ${{ needs.changes.outputs.version }}
         run: |
-          IFS=. read -r MAJ MIN PAT <<< "${{ steps.version.outputs.CLEAN_VERSION }}"
-          echo "CODE=$((MAJ * 1000000 + MIN * 10000 + PAT * 100))" >> "$GITHUB_OUTPUT"
-
-      - name: Build split-per-ABI APKs
-        run: |
-          flutter build apk --release --split-per-abi \
-            --build-name=${{ steps.version.outputs.CLEAN_VERSION }} \
-            --build-number=${{ steps.vercode.outputs.CODE }} \
-            --dart-define=APP_VERSION=${{ steps.version.outputs.VERSION }} \
-            --dart-define=FLUXCLOUD_BASE_URL=${{ secrets.FLUXCLOUD_BASE_URL }}
-
-      - name: Build universal APK
-        run: |
-          flutter build apk --release \
-            --build-name=${{ steps.version.outputs.CLEAN_VERSION }} \
-            --build-number=${{ steps.vercode.outputs.CODE }} \
-            --dart-define=APP_VERSION=${{ steps.version.outputs.VERSION }} \
-            --dart-define=FLUXCLOUD_BASE_URL=${{ secrets.FLUXCLOUD_BASE_URL }}
-
-      # ── 收集并统一命名（Flutter 输出到 build/app/outputs/flutter-apk/）──
-      - name: Collect and rename APKs
-        run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
-          SRC="build/app/outputs/flutter-apk"
+          FLUXDOWN_ANDROID_KEYSTORE="$RUNNER_TEMP/release.jks" \
+            mobile/Android/scripts/package.sh --version "$VERSION" \
+              --abis arm64-v8a,armeabi-v7a,x86_64 --out "$RUNNER_TEMP/apk"
           mkdir -p build/android
-          cp "$SRC/app-arm64-v8a-release.apk"   "build/android/FluxDown-${VERSION}-android-arm64-v8a.apk"
-          cp "$SRC/app-armeabi-v7a-release.apk" "build/android/FluxDown-${VERSION}-android-armeabi-v7a.apk"
-          cp "$SRC/app-x86_64-release.apk"      "build/android/FluxDown-${VERSION}-android-x86_64.apk"
-          cp "$SRC/app-release.apk"             "build/android/FluxDown-${VERSION}-android-universal.apk"
-          ls -la build/android/
+          for abi in arm64-v8a armeabi-v7a x86_64 universal; do
+            cp "$RUNNER_TEMP/apk/FluxDown-${VERSION}-android-native-${abi}.apk" \
+              "build/android/FluxDown-${VERSION}-android-${abi}.apk"
+          done
+
+      - name: Remove credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
 
       - name: Upload Android APK artifacts
         uses: actions/upload-artifact@v4

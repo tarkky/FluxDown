@@ -154,7 +154,7 @@ class ExternalDownloadActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    /** 免打扰优先（同 Flutter `_onShared`）；否则打开弹窗，已打开时追加进当前表单。 */
+    /** 免打扰优先；否则打开弹窗，已打开时追加进当前表单。 */
     private suspend fun dispatch(container: AppContainer, request: ExternalDownload) {
         val state = awaitReady(container)
         val plan = SilentCapture.plan(request, state)
@@ -186,7 +186,7 @@ class ExternalDownloadActivity : ComponentActivity() {
         if (container.host.value is HostRef.Local) DownloadServiceController.start(this)
     }
 
-    /** 同 Flutter `ExternalDownloadActivity.extractShared`：分享取文本，VIEW 取 data 与浏览器 extra。 */
+    /** 分享取文本，VIEW 取 data 与浏览器 extra。 */
     private fun parse(intent: Intent?): ExternalDownload? = when (intent?.action) {
         Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE ->
             ExternalIntake.fromSharedText(intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() } ?: clipText(intent))
@@ -210,7 +210,7 @@ class ExternalDownloadActivity : ComponentActivity() {
     }
 
     private companion object {
-        /** X 浏览器等调用外部下载器时随 VIEW 附带的请求上下文（键名区分大小写，同 Flutter 版）。 */
+        /** X 浏览器等调用外部下载器时随 VIEW 附带的请求上下文（键名区分大小写）。 */
         const val EXTRA_USER_AGENT = "User-Agent"
         const val EXTRA_COOKIE = "Cookie"
         const val EXTRA_REFERER = "Referer"

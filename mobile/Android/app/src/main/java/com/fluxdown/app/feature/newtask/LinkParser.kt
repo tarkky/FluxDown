@@ -140,7 +140,7 @@ internal fun hostOrNull(url: String): String? =
 internal val ThreadPresets = listOf(4, 8, 16, 32, 64)
 internal const val MaxThreads = 256
 
-/** 预设 UA（key → UA）。版本基准与桌面端 / Flutter 一致。 */
+/** 预设 UA（key → UA）。版本基准与 GPUI 桌面端 / Web 一致。 */
 internal val UaPresets: List<Pair<String, String>> = listOf(
     "chrome" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
     "firefox" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
@@ -198,7 +198,7 @@ internal fun manualProxyUrl(config: Map<String, String>): String {
     }
 }
 
-/** Dart `Uri.encodeComponent`：除 `A-Za-z0-9-_.!~*'()` 外全部按 UTF-8 百分号编码。 */
+/** URI 组件编码：除 `A-Za-z0-9-_.!~*'()` 外全部按 UTF-8 百分号编码。 */
 private fun encodeComponent(value: String): String {
     val sb = StringBuilder(value.length + 8)
     for (b in value.toByteArray(Charsets.UTF_8)) {

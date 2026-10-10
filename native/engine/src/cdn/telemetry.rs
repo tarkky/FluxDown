@@ -2,15 +2,15 @@
 //!
 //! 引擎在两个观测点采样：connect 预筛（连接耗时/死活）与 worker 段完成
 //! 回报（吞吐/失败）。样本进入进程级有界环形缓冲，去抖持久化到 config 表
-//! `cdn_pending_reports`（JSON 数组）；**上传由 Dart 云服务负责**（引擎不
-//! 持有云端会话）：Dart 周期读取该 key → `POST /api/v1/cdn/report` →
+//! `cdn_pending_reports`（JSON 数组）；**上传由 agent `cdn_worker` 负责**（引擎不
+//! 持有云端会话）：agent 周期（30min + 下载完成后延迟）读取该 key → `POST /api/v1/cdn/report` →
 //! 成功后写空值清空（宿主 apply-config 分支转调 [`clear`]）。
 //!
 //! 隐私边界（方案 §5.3）：只采 `(host, ip, connect_ms, throughput_bps, ok)`
 //! ——无 URL path/query/token/本机信息；`device_hash` 由服务端从鉴权设备
 //! 派生（客户端不发送）。采样常开，不提供用户开关。
 //!
-//! 可靠性取舍：遥测是尽力而为——「Dart 读取与清空之间新增的样本」会丢
+//! 可靠性取舍：遥测是尽力而为——「agent 读取与清空之间新增的样本」会丢
 //! （不会重复），缓冲溢出丢最旧样本。任何失败都不影响下载功能。
 
 use std::collections::VecDeque;
@@ -23,11 +23,11 @@ use serde::{Deserialize, Serialize};
 use crate::db::Db;
 use crate::logger::log_info;
 
-/// config 表 key：待上传样本（Dart 上报成功后写空清空）。
+/// config 表 key：待上传样本（agent 上报成功后写空清空）。
 const PENDING_KEY: &str = "cdn_pending_reports";
 
 /// 缓冲容量：超出丢最旧。64 条 = 服务端单次批量上限；4 批的余量足够
-/// 覆盖 Dart 30min 上报周期内的正常样本量。
+/// 覆盖 agent 30min 上报周期内的正常样本量。
 const MAX_PENDING: usize = 256;
 
 /// 持久化去抖（秒）：样本高频（每段一条），逐条落盘无意义。
@@ -112,7 +112,7 @@ pub(crate) fn record_segment(
     );
 }
 
-/// Dart 上报完成（宿主收到 `cdn_pending_reports` 空值写入）→ 清空缓冲。
+/// agent 上报完成（宿主收到 `cdn_pending_reports` 空值写入）→ 清空缓冲。
 /// 读取与清空之间新增的样本按设计丢弃（绝不重复上报）。
 pub fn clear() {
     if let Ok(mut buf) = pending().lock() {
@@ -161,7 +161,7 @@ pub(crate) async fn load_pending(db: &Db) {
         }
     }
 }
-/// 同步落盘当前缓冲快照（await 完成）。供宿主在 Dart `RequestConfig`
+/// 同步落盘当前缓冲快照（await 完成）。供宿主在 agent `cdn_worker`
 /// 读取 config 前调用，保证上报读到的 `cdn_pending_reports` 含全部
 /// 内存样本——否则去抖窗口尾部的样本（下载结束后不再有新 record 触发
 /// persist）会一直滞留内存、随进程退出丢失。缓冲为空时不写（避免把

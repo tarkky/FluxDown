@@ -37,7 +37,7 @@ use crate::theme_library::{
 use crate::ui::{Control, SettingsPage, SettingsSection, meta_text, row_button};
 use fluxdown_ui_components::{ButtonVariant, ControlExt as _, FluxIcon};
 
-/// 主题画廊（Flutter `_ThemeActions` 的「更多主题」同一地址）。
+/// 官方主题画廊地址。
 const THEME_GALLERY_URL: &str = "https://fluxdown.zerx.dev/themes";
 
 pub(crate) const LOCALE_KEY: &str = "general.locale";
@@ -141,7 +141,7 @@ pub fn theme_preference(value: &str) -> ThemePreference {
 
 // ───────────────────────── 主题卡片 ─────────────────────────
 
-/// 与 Flutter `_ThemeSelector` 一致：只展示可放进当前明暗槽位的卡片——同外观的内置预设，
+/// 只展示可放进当前明暗槽位的卡片——同外观的内置预设，
 /// 以及按 [`theme_library::theme_available_in`] 判定可用的已导入主题（当前选中的导入主题
 /// 即使不匹配也显示，便于切走或删除）。卡片下方为导入 / 导出 / 更多主题操作。
 fn theme_cards_field(ctx: &SectionContext) -> Control {
@@ -670,7 +670,7 @@ struct CustomColorSlot {
     _subscription: Subscription,
 }
 
-/// 与 Flutter `_ColorSchemeSelector` 一致：4 个预设色点 + 自定义；选中自定义时展开取色器。
+/// 4 个预设色点 + 自定义；选中自定义时展开取色器。
 fn color_scheme_field(ctx: &SectionContext) -> Control {
     let store = ctx.store();
     let labels: Vec<(AccentScheme, SharedString)> = AccentScheme::ALL
@@ -796,7 +796,7 @@ fn custom_color_picker(
                     }
                     slot.last_synced = argb;
                     // 自定义色只在 `color_scheme == custom` 时生效：两键一起写，否则偏好里仍是旧方案，
-                    // 投影会把强调色回退。云同步目录（Flutter `Color.toARGB32()`）约定整数 ARGB。
+                    // 投影会把强调色回退。云同步目录约定整数 ARGB。
                     store.update(cx, |store, cx| {
                         store.set_pref_str(COLOR_SCHEME_KEY, AccentScheme::Custom.wire_name(), cx);
                         store.set_pref_i64(CUSTOM_COLOR_KEY, i64::from(argb), cx);

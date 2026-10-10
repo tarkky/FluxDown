@@ -91,7 +91,7 @@ export function EndpointDialog({
   const canSave = name.trim() !== '' && url.trim() !== '' && urlError === null
   const canTest = !testing && url.trim() !== ''
 
-  /** 草稿 → 模型（与 Dart `_draft` 同序同规则）。 */
+  /** 草稿 → 模型。 */
   const buildDraft = (): EndpointSpec => {
     const headerMap: Record<string, string> = {}
     for (const row of headers) {

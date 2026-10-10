@@ -221,7 +221,7 @@ fn selection_documents(appearance: &AppearancePreferences, cx: &App) -> ThemeDoc
     }
 }
 
-/// 在 `gpui_component::init` 后安装与 Flutter 客户端一致的默认主题。
+/// 在 `gpui_component::init` 后安装默认主题。
 pub fn init(cx: &mut App) {
     let appearance = AppearancePreferences::default();
     let documents = selection_documents(&appearance, cx);
@@ -387,7 +387,7 @@ fn project_onto_kit(kit: &mut ComponentTheme, theme: &ResolvedTheme) {
     kit.apply_semantic_tokens(tokens);
     kit.focus_ring = false;
     // gpui-component 的 `text_base` 取 `font_size`（默认映射到 md=16px），
-    // 对桌面密度偏大；与 Flutter 桌面端 13px 正文基线对齐取 sm。
+    // 对桌面密度偏大；按桌面端 13px 正文基线取 sm。
     kit.font_size = tokens.typography.sm.size;
 
     let primary_hover = shift_toward_contrast(colors.primary, 0.08);

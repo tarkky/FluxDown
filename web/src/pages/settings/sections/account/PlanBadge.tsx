@@ -1,4 +1,4 @@
-// 套餐徽标（GPUI profile.rs `plan_tag` / Flutter `_PlanTag`）：outline | solid | medal | ribbon | plain，纯色无渐变。
+// 套餐徽标（与 GPUI profile.rs `plan_tag` 同步）：outline | solid | medal | ribbon | plain，纯色无渐变。
 
 import { Crown } from 'lucide-react'
 import type { CSSProperties } from 'react'

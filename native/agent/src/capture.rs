@@ -94,7 +94,8 @@ pub struct CaptureService {
     daemon: Arc<DaemonClient>,
     events: AgentEventHub,
     pending: Mutex<VecDeque<CaptureTransaction>>,
-    /// 待确认捕获入队时按需拉起官方 UI。
+    /// 静默建成单个任务且没有 UI 时按需拉起官方 UI 承载进度窗口（待确认捕获的拉起由外壳
+    /// 控制循环按快照电平触发，见 `shell::prompt_launch`）。
     shell: Arc<ShellState>,
 }
 
@@ -109,10 +110,10 @@ impl CaptureService {
         }
     }
 
-    /// 按来源分流：`Direct` 与开启免打扰的 `External` 直接提交 daemon，其余排入确认队列并在
-    /// 队列由空变非空时唤起官方 UI。批量请求（换行连接的多 URL）先拆成逐条请求。
+    /// 按来源分流：`Direct` 与开启免打扰的 `External` 直接提交 daemon，其余排入确认队列（外壳
+    /// 控制循环据快照在没有 UI 时拉起官方 UI）。批量请求（换行连接的多 URL）先拆成逐条请求。
     ///
-    /// 保存目录优先级与 Flutter 一致：捕获方指定 > 分类目录 > （仅静默）跟随上次 > daemon 默认。
+    /// 保存目录优先级：捕获方指定 > 分类目录 > （仅静默）跟随上次 > daemon 默认（原生移动端 `SilentCapture` 同序）。
     /// 确认路径把分类目录写进待确认摘要，官方表单据此预填。
     pub async fn submit(
         &self,
@@ -193,12 +194,11 @@ impl CaptureService {
     }
 
     async fn enqueue(&self, requests: Vec<DownloadRequest>) -> Result<Value, CaptureError> {
-        let (first, transaction_ids) = {
+        let transaction_ids = {
             let mut pending = self.pending.lock().await;
             if pending.len() + requests.len() > CAPTURE_CAPACITY {
                 return Err(CaptureError::Full);
             }
-            let first = pending.is_empty();
             let mut transaction_ids = Vec::with_capacity(requests.len());
             for request in requests {
                 let public = pending_capture_dto(&request);
@@ -209,12 +209,9 @@ impl CaptureService {
                     group_creation: None,
                 });
             }
-            (first, transaction_ids)
+            transaction_ids
         };
         self.publish().await;
-        if first {
-            self.shell.launch_for_prompt();
-        }
         Ok(json!({ "transactionIds": transaction_ids }))
     }
 

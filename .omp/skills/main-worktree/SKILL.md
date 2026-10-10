@@ -42,5 +42,5 @@ git log stable --not main --oneline
 ## 注意
 
 - 同一分支不能同时被两个 worktree checkout；主目录保持 `main`。
-- worktree 有独立的 `target/`、`build/`、`.dart_tool/`，首次构建全量编译属正常。
+- worktree 有独立的 `target/`、`build/`，首次构建全量编译属正常。
 - 收尾可选：`git worktree remove .worktrees/stable`（长期保留也没问题）。

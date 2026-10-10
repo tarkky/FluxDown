@@ -85,7 +85,7 @@ private final class PreferencesDecodeCache: @unchecked Sendable {
 
 // MARK: - 自定义分类
 
-/// 自定义分类（偏好键 `custom_categories`，与 `lib/src/models/custom_category.dart` 同 JSON 形状）。
+/// 自定义分类（偏好键 `custom_categories`，与 Rust protocol 的 `CustomCategoryDto` 同 JSON 形状）。
 /// 与 `TaskCategory`（匹配用的只读投影）不同，这里保留编辑所需的全部字段（匹配模式 / 保存目录 / 内置标记）。
 public struct CustomCategoryDto: Sendable, Hashable, Identifiable, Codable {
     public static let preferenceKey = "custom_categories"
@@ -149,7 +149,7 @@ public struct CustomCategoryDto: Sendable, Hashable, Identifiable, Codable {
         saveDir = try c.decodeIfPresent(String.self, forKey: .saveDir) ?? ""
     }
 
-    /// 与 Dart / Web 同形：`builtinType` 为空时写显式 `null`。
+    /// 与 Web 同形：`builtinType` 为空时写显式 `null`。
     public func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
@@ -299,7 +299,7 @@ public enum CategoryRules {
     }
 
     /// 分类显示名 → 目录名：非法字符（`\ / : * ? " < > |` 与控制字符）换空格、压缩空白、去掉 Windows 会丢弃的结尾点 / 空格
-    /// （`sanitizeCategoryDirName`，GPUI / Dart / Web 同规）。
+    /// （`sanitizeCategoryDirName`，GPUI / Web 同规）。
     public static func sanitizeDirName(_ label: String) -> String {
         let invalid: Set<Character> = ["\\", "/", ":", "*", "?", "\"", "<", ">", "|"]
         var replaced = ""

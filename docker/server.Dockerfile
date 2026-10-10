@@ -8,7 +8,7 @@
 # 构建上下文 = 仓库根目录（依赖根 .dockerignore 收窄上下文）：
 #   docker build -f docker/server.Dockerfile -t fluxdown-server .
 #   docker buildx build --platform linux/amd64,linux/arm64 -f docker/server.Dockerfile .
-# 版本号 = fluxdown_agent crate 版本（不再有编译期版本注入）。
+# 版本号 = 构建参数 FLUXDOWN_APP_VERSION（发布流水线传 tag 版本；不传则回落 crate 版本）。
 #
 # 运行（首次打开 Web 界面时自行设置访问密钥；也可用 -e FLUXDOWN_TOKEN=... 预置）：
 #   docker run -d -p 17800:17800 -v fluxdown-data:/data fluxdown-server
@@ -19,7 +19,7 @@ WORKDIR /src/web
 COPY web/package.json web/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY web/ ./
-# Vite 别名从仓库根引用共享文案、GPUI 主题解析器与内置文件图标包（与 GPUI/Flutter 同一份事实源）
+# Vite 别名从仓库根引用共享文案、GPUI 主题解析器与内置文件图标包（与 GPUI 同一份事实源）
 COPY assets/i18n/ /src/assets/i18n/
 COPY assets/icon-packs/ /src/assets/icon-packs/
 COPY website-v2/src/lib/gpui-theme/ /src/website-v2/src/lib/gpui-theme/

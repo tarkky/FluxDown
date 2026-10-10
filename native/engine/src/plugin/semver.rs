@@ -1,5 +1,5 @@
-//! engine-local 三段 semver 比较，逐字复刻 `hub/src/updater.rs` 的 `parse_semver`/
-//! `is_newer` 语义：仅比较 major.minor.patch 三段整数字典序，忽略预发布/构建元数据，
+//! engine-local 三段 semver 比较：仅比较 major.minor.patch 三段
+//! 整数字典序，忽略预发布/构建元数据，
 //! 格式非法视为不满足。
 //!
 //! 不跨 crate 抽取（几十行工具函数共享收益不成比例），不引入 semver crate。
