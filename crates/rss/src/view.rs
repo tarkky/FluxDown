@@ -13,7 +13,7 @@ use fluxdown_ui_i18n::Translator;
 use fluxdown_ui_theme::active_theme;
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Div, Entity, FontWeight, Hsla,
-    InteractiveElement as _, IntoElement, ParentElement, Pixels, Render, SharedString,
+    InteractiveElement as _, IntoElement, ParentElement, Pixels, Render, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled, Window, div, prelude::FluentBuilder as _, px,
     uniform_list,
 };
@@ -725,6 +725,7 @@ impl RssView {
         let can_ignore = item.status == 0;
         let task_missing = item.status == 1 && self.controller.task_status(&item).is_none();
         let group = SharedString::from(format!("rss-item-{source_id}-{guid}"));
+        let status_id = SharedString::from(format!("rss-status-{source_id}-{guid}"));
         let mut meta = Vec::new();
         if !date.is_empty() {
             meta.push(format!("{} · {date}", self.t("rssPublishedAt", cx)));
@@ -801,11 +802,13 @@ impl RssView {
                     }),
             )
             .child(
+                // 状态列固定宽度，徽标靠左贴近条目内容；文字被截断时悬停看全文。
                 h_flex()
                     .w(status_width)
                     .flex_none()
-                    .justify_end()
+                    .min_w_0()
                     .child(status_badge(
+                        status_id,
                         status,
                         task_missing.then_some(colors.destructive),
                         cx,
@@ -1018,12 +1021,20 @@ fn meta_text(cx: &App) -> Div {
 }
 
 /// 中性小徽标（条目状态）；`tone` 仅用于需要提示的状态（如任务丢失）。
-fn status_badge(text: SharedString, tone: Option<Hsla>, cx: &App) -> Div {
+/// 列宽固定，长文案会被截断，悬停提示展示完整状态文字。
+fn status_badge(
+    id: SharedString,
+    text: SharedString,
+    tone: Option<Hsla>,
+    cx: &App,
+) -> Stateful<Div> {
     let theme = active_theme(cx);
     let tokens = theme.tokens();
     let caption = theme.extended().caption;
+    let full = text.clone();
     div()
-        .flex_none()
+        .id(id)
+        .min_w_0()
         .max_w_full()
         .truncate()
         .px(tokens.spacing.xs + tokens.spacing.xxs)
@@ -1034,6 +1045,7 @@ fn status_badge(text: SharedString, tone: Option<Hsla>, cx: &App) -> Div {
         .line_height(caption.line_height)
         .font_weight(FontWeight::MEDIUM)
         .text_color(tone.unwrap_or(tokens.colors.muted_foreground))
+        .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
         .child(text)
 }
 
