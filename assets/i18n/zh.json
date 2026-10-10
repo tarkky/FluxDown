@@ -744,6 +744,7 @@
   "progressWindowPartsHide": "收起分段详情",
   "progressWindowPartWaiting": "等待中",
   "progressWindowShowCompletion": "完成后显示完成窗口",
+  "progressWindowDeleteFiles": "同时删除已下载的文件",
   "silentDownload": "免打扰下载",
   "silentDownloadDesc": "浏览器扩展等外部下载请求不再弹出确认框，直接按默认设置开始下载",
   "silentSkipSelection": "跳过二次选择弹窗",

@@ -5,12 +5,14 @@
 //! [`DownloadsController`] 维护任务状态。窗口尺寸由宿主恢复并交给用户调整，内容区可滚动，
 //! 操作栏固定在底部；进度刷新和完成视图切换不改变窗口边界。
 //! 开窗与关窗策略由宿主决定（见 [`crate::ProgressWindowTracker`]），本视图只在任务被删除、
-//! 用户点「停止」或打开文件 / 文件夹后发出 [`ProgressWindowEvent::Close`]。
+//! 用户点「停止」、确认删除任务或打开文件 / 文件夹后发出 [`ProgressWindowEvent::Close`]。
 
 use std::sync::Arc;
 
 use fluxdown_protocol::{AgentEvent, AgentSnapshot, DaemonEvent, ServiceEvent, TaskRuntimeDto};
-use fluxdown_ui_components::{ControlExt as _, FluxIcon, card, check_row, tabular_numbers};
+use fluxdown_ui_components::{
+    ControlExt as _, FluxIcon, IconControlExt as _, card, check_row, tabular_numbers,
+};
 use fluxdown_ui_i18n::Translator;
 use fluxdown_ui_theme::active_theme;
 use gpui::{
@@ -19,7 +21,7 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    Disableable as _, Icon,
+    Disableable as _, Icon, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
@@ -64,7 +66,7 @@ const MAX_ETA_SECS: u64 = 86_400;
 
 /// 视图对宿主的事件。
 pub enum ProgressWindowEvent {
-    /// 关闭承载窗口（任务已删除 / 用户停止）。
+    /// 关闭承载窗口（任务已删除 / 用户停止 / 用户删除）。
     Close,
     /// 已把文件 / 所在文件夹交给系统打开：宿主应关窗，但要等打开的程序接管前台后再关，
     /// 否则关闭本应用的前台窗口会让系统把主窗口提到前面。
@@ -76,7 +78,7 @@ pub enum ProgressWindowEvent {
 /// 命令成功后的窗口去留。
 #[derive(Clone, Copy)]
 enum AfterSuccess {
-    /// 立即关窗（停止）。
+    /// 立即关窗（停止 / 删除）。
     Close,
     /// 交给系统程序后关窗（打开文件 / 文件夹）。
     HandOff,
@@ -92,6 +94,8 @@ pub struct ProgressWindowView {
     show_completion: bool,
     parts_expanded: bool,
     closed: bool,
+    /// 删除确认框里「同时删除已下载的文件」的勾选状态（每次打开确认框重置为不删）。
+    delete_files: bool,
     last_error: Option<SharedString>,
 }
 
@@ -122,6 +126,7 @@ impl ProgressWindowView {
             show_completion,
             parts_expanded: false,
             closed: false,
+            delete_files: false,
             last_error: None,
         }
     }
@@ -275,6 +280,75 @@ impl ProgressWindowView {
             Some(AfterSuccess::Close),
             cx,
         );
+    }
+
+    /// 删除：二次确认，由用户勾选是否同时删除已下载的文件（默认保留）。
+    fn confirm_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(name) = self.row().map(|row| row.name.clone()) else {
+            return;
+        };
+        self.delete_files = false;
+        let title = self.strings.delete_task.clone();
+        let ok_label = self.strings.delete.clone();
+        let cancel_label = self.strings.cancel.clone();
+        let files_label = self.t(cx, "progressWindowDeleteFiles");
+        let this = cx.weak_entity();
+        window.open_alert_dialog(cx, move |dialog, _, cx| {
+            // 确认框每帧重建：勾选状态从视图读取，描述随勾选切换。
+            let delete_files = this
+                .upgrade()
+                .is_some_and(|view| view.read(cx).delete_files);
+            let description = this.upgrade().map_or_else(SharedString::default, |view| {
+                view.read(cx)
+                    .strings
+                    .delete_task_description(&name, delete_files)
+            });
+            let toggle = this.clone();
+            let submit = this.clone();
+            dialog
+                .title(fluxdown_ui_components::dialog_title(title.clone(), cx))
+                .description(description)
+                .child(check_row(
+                    "progress-delete-files",
+                    delete_files,
+                    files_label.clone(),
+                    move |value, window, cx| {
+                        let Ok(()) = toggle.update(cx, |this, _| this.delete_files = value) else {
+                            // 视图已释放，确认框随窗口关闭。
+                            return;
+                        };
+                        window.refresh();
+                    },
+                    cx,
+                ))
+                .footer(fluxdown_ui_components::dialog_footer(
+                    Some(cancel_label.clone()),
+                    ok_label.clone(),
+                    fluxdown_ui_components::DialogIntent::Destructive,
+                    cx,
+                ))
+                .on_ok(move |_, _, cx| {
+                    // 视图释放后没有提交命令，不能让确认框报告成功。
+                    submit
+                        .update(cx, |this, cx| {
+                            let command = DownloadsCommand::Delete {
+                                task_id: this.task_id.clone(),
+                                delete_files: this.delete_files,
+                            };
+                            this.run(command, Some(AfterSuccess::Close), cx);
+                        })
+                        .is_ok()
+                })
+        });
+    }
+
+    fn render_delete_button(&self, cx: &mut Context<Self>) -> Button {
+        Button::new("progress-delete")
+            .outline()
+            .control_icon(cx)
+            .icon(FluxIcon::Trash2)
+            .tooltip(self.strings.delete_task.clone())
+            .on_click(cx.listener(|this, _, window, cx| this.confirm_delete(window, cx)))
     }
 
     fn open_file(&mut self, cx: &mut Context<Self>) {
@@ -833,6 +907,7 @@ impl ProgressWindowView {
                     cx,
                 )),
             )
+            .child(self.render_delete_button(cx))
             .child(
                 Button::new("progress-stop")
                     .outline()
@@ -967,6 +1042,7 @@ impl ProgressWindowView {
     fn render_completed_footer(&self, missing: bool, cx: &mut Context<Self>) -> AnyElement {
         Self::footer(cx)
             .justify_end()
+            .child(div().flex_1().child(self.render_delete_button(cx)))
             .child(
                 Button::new("progress-open-folder")
                     .outline()

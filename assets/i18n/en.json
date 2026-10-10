@@ -744,6 +744,7 @@
   "progressWindowPartsHide": "Hide segments",
   "progressWindowPartWaiting": "Waiting",
   "progressWindowShowCompletion": "Show complete window when finished",
+  "progressWindowDeleteFiles": "Also delete downloaded file",
   "silentDownload": "Silent Download",
   "silentDownloadDesc": "Start external downloads (e.g. from the browser extension) immediately with default settings, without showing the confirmation dialog",
   "silentSkipSelection": "Skip selection dialogs",
