@@ -2,9 +2,9 @@
 
 use fluxdown_protocol::method;
 use fluxdown_ui_components::{ButtonVariant, FluxIcon, button, loading_button};
-use fluxdown_ui_i18n::system_locale;
 use fluxdown_ui_theme::active_theme;
-use gpui::{App, IntoElement as _, ParentElement, SharedString, Styled, div};
+use gpui::{App, IntoElement as _, ParentElement, SharedString, Styled, div, rems};
+use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::{h_flex, v_flex};
 use serde_json::json;
 
@@ -173,26 +173,41 @@ fn check_update_control(ctx: &SectionContext) -> Control {
 
 fn release_notes_item(ctx: &SectionContext) -> SettingsRow {
     let store = ctx.store();
-    let locale = system_locale();
+    // 跟随应用界面语言（设置里可手动切换），而不是系统 locale。
+    let locale = ctx.translator.locale().to_owned();
     SettingsRow::custom(move |_, _, _, cx: &mut App| {
-        let tokens = active_theme(cx).tokens();
+        let tokens = active_theme(cx).tokens().clone();
         let notes = store.read(cx).update_status().notes.clone();
         if notes.is_empty() {
             return div().into_any_element();
         }
         v_flex()
             .w_full()
-            .gap(tokens.spacing.sm)
+            .gap(tokens.spacing.md)
             .children(notes.into_iter().take(10).map(|note| {
+                let body = localized_release_body(&note.body, &locale).to_owned();
+                let markdown = TextView::markdown(
+                    SharedString::from(format!("release-notes-{}", note.version)),
+                    body,
+                )
+                .style(TextViewStyle::default().paragraph_gap(rems(0.5)))
+                .selectable(true)
+                .w_full();
                 v_flex()
-                    .gap(tokens.spacing.xxs)
+                    .w_full()
+                    .gap(tokens.spacing.xs)
                     .child(body_text(cx).child(SharedString::from(format!(
                         "v{} {}",
                         note.version, note.published_at
                     ))))
-                    .child(meta_text(cx).child(SharedString::from(
-                        localized_release_body(&note.body, &locale).to_owned(),
-                    )))
+                    .child(
+                        div()
+                            .w_full()
+                            .text_size(tokens.typography.sm.size)
+                            .line_height(tokens.typography.sm.line_height)
+                            .text_color(tokens.colors.foreground)
+                            .child(markdown),
+                    )
             }))
             .into_any_element()
     })
@@ -397,7 +412,7 @@ mod tests {
     use super::localized_release_body;
 
     #[test]
-    fn release_notes_follow_system_language() {
+    fn release_notes_follow_ui_language() {
         let body = "前言\n<!-- fluxdown:lang:zh -->\n## 问题修复\n- 修复下载\n\
                     <!-- fluxdown:lang:en -->\n## Bug Fixes\n- Fix downloads\n";
         for locale in ["zh", "zh_CN", "zh-Hans-CN", "zh-Hant-TW", "ZH_hk"] {
