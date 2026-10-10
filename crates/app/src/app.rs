@@ -198,7 +198,7 @@ pub(crate) fn run() -> Result<RunOutcome, AppError> {
     let open_urls_client = agent_client.clone();
 
     // GPUI 在非 macOS 默认关掉最后一个窗口即退出；必须让 lifecycle 等待在途提交。
-    let application = gpui_platform::application()
+    let application = desktop_application()
         .with_quit_mode(gpui::QuitMode::Explicit)
         .with_assets(DesktopAssets);
     application.on_open_urls(move |urls| {
@@ -481,6 +481,21 @@ fn start_windows_listener(
             )
         })?
 }
+
+/// 创建 GPUI 应用。macOS 关闭 GPUI 无障碍：`accesskit_macos::SubclassingAdapter`
+/// 会动态改写窗口内容视图的类，窗口关闭释放适配器时又无条件改回原类，抹掉
+/// Touch Bar（`_NSTouchBarFinder`）在该视图上注册的 KVO；下一帧移除观察者抛出
+/// NSException，带 Touch Bar 的 Mac 关闭任意窗口即闪退（SIGILL）。
+#[cfg(target_os = "macos")]
+fn desktop_application() -> gpui::Application {
+    gpui::Application::new_inaccessible(gpui_platform::current_platform(false))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn desktop_application() -> gpui::Application {
+    gpui_platform::application()
+}
+
 fn open_main_minimized(cx: &mut App) {
     if let Some(handle) = crate::windows::main::open(cx)
         && let Err(error) = handle.update(cx, |_, window, _| window.minimize_window())
