@@ -9,7 +9,10 @@ import android.os.Bundle
  * （X / Via 等）还按 Flutter 版保存的组件名把下载 intent 显式发给它。
  *
  * 自身无界面（`Theme.NoDisplay`）：下载 intent（VIEW / SEND / SEND_MULTIPLE）转交透明的
- * [ExternalDownloadActivity]，其余转交主界面 [HomeActivity]，随即结束。
+ * [ExternalDownloadActivity]，其余转交主界面 [HomeActivity]，随即连同自身任务一起移除。
+ *
+ * 独立亲和性（`taskAffinity=""`）让它永远是自身任务的唯一 Activity；用 `finish()` 会在最近任务里
+ * 留下一张空卡，所以必须 [finishAndRemoveTask]，manifest 另以 `excludeFromRecents` 防止截到空白快照。
  */
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -29,6 +32,6 @@ class MainActivity : Activity() {
             else -> HomeActivity::class.java
         }
         startActivity(Intent(source).setClass(this, target))
-        finish()
+        finishAndRemoveTask()
     }
 }

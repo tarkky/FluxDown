@@ -46,9 +46,11 @@
         android:usesCleartextTraffic="true"
         tools:targetApi="37">
         <!-- 对外稳定入口（类名不可改：桌面图标、固定快捷方式与按 Flutter 版保存组件名的浏览器都指向它）。
-             无界面路由：下载 intent → ExternalDownloadActivity，其余 → HomeActivity。 -->
+             无界面路由：下载 intent → ExternalDownloadActivity，其余 → HomeActivity。
+             独立任务只作跳板：excludeFromRecents + finishAndRemoveTask，最近任务里只留主界面一张卡。 -->
         <activity
             android:name=".MainActivity"
+            android:excludeFromRecents="true"
             android:exported="true"
             android:launchMode="singleTask"
             android:taskAffinity=""
