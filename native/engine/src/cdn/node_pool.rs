@@ -340,6 +340,16 @@ impl NodePool {
         )
     }
 
+    /// SYS 槽位（node[0]）的任务 client：完成后内容审计等不属于任何分段租约的
+    /// 一次性请求使用，不占用租约/不影响调度统计。
+    pub fn sys_client(&self) -> Option<Client> {
+        let inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        inner.slots.first().and_then(|slot| slot.client.clone())
+    }
+
     /// 多节点池：node[0] 恒为 SYS（`task_client`），`candidates` 每 IP 一个
     /// 懒建 pinned client 槽位。初始估计取持久化健康度（fresh）或冷启动
     /// 中位初值。`origins` = 每 IP 的解析来源归因（缺失 → 空串）；

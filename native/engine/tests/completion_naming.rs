@@ -5,6 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use fluxdown_engine::bt_downloader::BtConfig;
 use fluxdown_engine::download_manager::NewTaskSpec;
@@ -73,6 +74,17 @@ async fn download_with_hint(
     file_name: &str,
     hint_file_size: i64,
 ) -> (String, Vec<u8>) {
+    download_with_segments(port, path, file_name, hint_file_size, 1).await
+}
+
+/// 同 [`download_with_hint`]，另可指定分段数。
+async fn download_with_segments(
+    port: u16,
+    path: &str,
+    file_name: &str,
+    hint_file_size: i64,
+    segments: i32,
+) -> (String, Vec<u8>) {
     let work = std::env::temp_dir().join(format!("fluxdown-naming-{}", uuid::Uuid::new_v4()));
     tokio::fs::create_dir_all(&work).await.unwrap();
     let mut engine = Engine::new(
@@ -103,7 +115,7 @@ async fn download_with_hint(
             url: format!("http://127.0.0.1:{port}{path}"),
             save_dir: work.to_string_lossy().into_owned(),
             file_name: file_name.to_owned(),
-            segments: 1,
+            segments,
             hint_file_size,
             ..Default::default()
         })
@@ -202,4 +214,184 @@ async fn hint_mode_without_probe_uses_first_get_content_disposition() {
     let (name, content) = download_with_hint(port, "/dl.php?id=7", "", BODY.len() as i64).await;
     assert_eq!(name, "pack.zip");
     assert_eq!(content, BODY);
+}
+
+/// 支持 Range 的计数服务器：统计 HEAD、`Range: bytes=0-0` 探测与其余 Range GET。
+struct RangeServer {
+    port: u16,
+    head: Arc<AtomicUsize>,
+    probe_range: Arc<AtomicUsize>,
+    other_range: Arc<AtomicUsize>,
+}
+
+/// `hang_head`：HEAD 收到请求后永不应答（模拟 Hetzner 经代理 HEAD 挂死）。
+/// `content_disposition`：非空时 HEAD / GET 都带该 Content-Disposition。
+async fn spawn_range_server(
+    body: Arc<Vec<u8>>,
+    content_disposition: &'static str,
+    hang_head: bool,
+) -> RangeServer {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let head = Arc::new(AtomicUsize::new(0));
+    let probe_range = Arc::new(AtomicUsize::new(0));
+    let other_range = Arc::new(AtomicUsize::new(0));
+    let (head_c, probe_c, other_c) = (head.clone(), probe_range.clone(), other_range.clone());
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let (body, head, probe, other) = (
+                body.clone(),
+                head_c.clone(),
+                probe_c.clone(),
+                other_c.clone(),
+            );
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 1024];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                }
+                let text = String::from_utf8_lossy(&buf).into_owned();
+                let method = text
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .split(' ')
+                    .next()
+                    .unwrap_or("")
+                    .to_owned();
+                let range = text.lines().find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("range")
+                        .then(|| value.trim().to_owned())
+                });
+                let total = body.len();
+                let cd = if content_disposition.is_empty() {
+                    String::new()
+                } else {
+                    format!("Content-Disposition: {content_disposition}\r\n")
+                };
+                let common = format!(
+                    "Content-Type: application/octet-stream\r\nAccept-Ranges: bytes\r\n{cd}"
+                );
+                let (head_bytes, payload): (String, &[u8]) = if method == "HEAD" {
+                    head.fetch_add(1, Ordering::SeqCst);
+                    if hang_head {
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                        return;
+                    }
+                    (
+                        format!(
+                            "HTTP/1.1 200 OK\r\n{common}Content-Length: {total}\r\nConnection: close\r\n\r\n"
+                        ),
+                        &[],
+                    )
+                } else if let Some(spec) = range.as_deref().and_then(|r| r.strip_prefix("bytes=")) {
+                    if spec == "0-0" {
+                        probe.fetch_add(1, Ordering::SeqCst);
+                    } else {
+                        other.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let (start, end) = spec.split_once('-').unwrap_or(("0", ""));
+                    let start: usize = start.parse().unwrap_or(0);
+                    let end: usize = end.parse().unwrap_or(total - 1).min(total - 1);
+                    (
+                        format!(
+                            "HTTP/1.1 206 Partial Content\r\n{common}Content-Range: bytes {start}-{end}/{total}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            end - start + 1
+                        ),
+                        &body[start..=end],
+                    )
+                } else {
+                    (
+                        format!(
+                            "HTTP/1.1 200 OK\r\n{common}Content-Length: {total}\r\nConnection: close\r\n\r\n"
+                        ),
+                        &body[..],
+                    )
+                };
+                if stream.write_all(head_bytes.as_bytes()).await.is_err()
+                    || stream.write_all(payload).await.is_err()
+                {
+                    return;
+                }
+                if let Err(error) = stream.shutdown().await {
+                    eprintln!("test HTTP client closed connection: {error}");
+                }
+            });
+        }
+    });
+    RangeServer {
+        port,
+        head,
+        probe_range,
+        other_range,
+    }
+}
+
+fn patterned_body(len: usize) -> Arc<Vec<u8>> {
+    Arc::new((0..len).map(|i| (i % 251) as u8).collect())
+}
+
+/// 断言启动序幕与下载器合计只发了一轮探测（1 个 HEAD + 1 个 `bytes=0-0`），
+/// 且真实下载走了多段（至少 2 条非探测 Range GET）。
+fn assert_single_probe_round_and_multi_segment(server: &RangeServer) {
+    assert_eq!(server.head.load(Ordering::SeqCst), 1, "HEAD probes");
+    assert_eq!(
+        server.probe_range.load(Ordering::SeqCst),
+        1,
+        "Range 0-0 probes"
+    );
+    assert!(
+        server.other_range.load(Ordering::SeqCst) >= 2,
+        "expected multi-segment download, got {} ranged GETs",
+        server.other_range.load(Ordering::SeqCst)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nameless_task_probes_once_and_names_from_content_disposition() {
+    let body = patterned_body(16 * 1024 * 1024);
+    let server = spawn_range_server(
+        body.clone(),
+        "attachment; filename=\"real-name.bin\"",
+        false,
+    )
+    .await;
+    let (name, content) = download_with_segments(server.port, "/dl?id=1", "", 0, 4).await;
+    assert_eq!(name, "real-name.bin");
+    assert!(content == *body, "downloaded content must match the body");
+    assert_single_probe_round_and_multi_segment(&server);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nameless_task_probes_once_and_names_from_url() {
+    let body = patterned_body(16 * 1024 * 1024);
+    let server = spawn_range_server(body.clone(), "", false).await;
+    let (name, content) = download_with_segments(server.port, "/files/blob.bin", "", 0, 4).await;
+    assert_eq!(name, "blob.bin");
+    assert!(content == *body, "downloaded content must match the body");
+    assert_single_probe_round_and_multi_segment(&server);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hung_head_does_not_burn_the_prelude_timeout() {
+    // HEAD 永不应答、`Range: bytes=0-0` 1s 内应答：序幕不再单独跑 8s 超时的裸 HEAD，
+    // 而是共用下载器的 HEAD ∥ Range 探测（conclusive 206 后 HEAD 只再给 1s 宽限）。
+    let body = patterned_body(16 * 1024 * 1024);
+    let server = spawn_range_server(body.clone(), "attachment; filename=\"hang.bin\"", true).await;
+    let started = std::time::Instant::now();
+    let (name, content) = download_with_segments(server.port, "/dl?id=2", "", 0, 4).await;
+    assert_eq!(name, "hang.bin");
+    assert!(content == *body, "downloaded content must match the body");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(7),
+        "download took {:?}; prelude must not wait out the 8s HEAD timeout",
+        started.elapsed()
+    );
+    assert_single_probe_round_and_multi_segment(&server);
 }

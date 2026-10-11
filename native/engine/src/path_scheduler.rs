@@ -124,6 +124,36 @@ pub fn balanced_keep(remaining: i64, holder_bps: Option<f64>, helper_bps: Option
     keep.clamp(piece, (remaining - piece).max(piece))
 }
 
+/// 计入帮手请求建立耗时的均衡完成拆分：帮手要 `setup_secs` 后才开始收字节，
+/// 双方同时完成需满足 `keep/h = setup + (R − keep)/g`，即
+/// `keep = h·(setup·g + R)/(h + g)`。持有者独自完成剩余字节不比帮手建立请求
+/// 更久（`R/h ≤ setup`）时拆分只会多发一个请求、白占一条连接，返回 `None`。
+/// 任一速率未知或 `setup_secs ≤ 0` → 退化为 [`balanced_keep`]。
+#[must_use]
+pub fn split_keep_with_setup(
+    remaining: i64,
+    holder_bps: Option<f64>,
+    helper_bps: Option<f64>,
+    setup_secs: f64,
+) -> Option<i64> {
+    let (Some(holder), Some(helper)) = (holder_bps, helper_bps) else {
+        return Some(balanced_keep(remaining, holder_bps, helper_bps));
+    };
+    if !(setup_secs.is_finite() && setup_secs > 0.0 && holder > 0.0) {
+        return Some(balanced_keep(remaining, holder_bps, helper_bps));
+    }
+    if completion_secs(remaining, holder) <= setup_secs {
+        return None;
+    }
+    if !(helper.is_finite() && helper > 0.0 && holder.is_finite()) {
+        return Some(balanced_keep(remaining, holder_bps, helper_bps));
+    }
+    let half = remaining / 2;
+    let piece = MIN_SPLIT_PIECE.min(half).max(1);
+    let keep = (holder * (setup_secs * helper + remaining as f64) / (holder + helper)) as i64;
+    Some(keep.clamp(piece, (remaining - piece).max(piece)))
+}
+
 /// 预计完成秒数；速率未知或为 0 → `f64::INFINITY`。
 #[must_use]
 pub fn completion_secs(remaining: i64, bps: f64) -> f64 {
@@ -256,5 +286,39 @@ mod tests {
             300.0 * KB as f64,
             10.0 * MB as f64
         ));
+    }
+
+    #[test]
+    fn split_refused_when_holder_finishes_before_helper_starts() {
+        // 持有者 500KB/s 剩 256KB 需 0.5s，帮手建立请求要 1.2s：拆了也帮不上。
+        let rate = 500.0 * KB as f64;
+        assert_eq!(
+            split_keep_with_setup(256 * KB, Some(rate), Some(rate), 1.2),
+            None
+        );
+    }
+
+    #[test]
+    fn split_point_compensates_helper_setup() {
+        // 同速 1MB/s、剩 10MB、帮手建连 2s：持有者留 6MB，双方都在 6s 完成。
+        let rate = MB as f64;
+        assert_eq!(
+            split_keep_with_setup(10 * MB, Some(rate), Some(rate), 2.0),
+            Some(6 * MB)
+        );
+        // 无延迟样本 / 速率未知时与历史拆分点一致。
+        assert_eq!(
+            split_keep_with_setup(10 * MB, Some(rate), Some(rate), 0.0),
+            Some(balanced_keep(10 * MB, Some(rate), Some(rate)))
+        );
+        assert_eq!(
+            split_keep_with_setup(10 * MB, None, Some(rate), 2.0),
+            Some(5 * MB)
+        );
+        // 停滞持有者（0 B/s）照旧把几乎全部余量交给帮手。
+        assert_eq!(
+            split_keep_with_setup(10 * MB, Some(0.0), Some(rate), 2.0),
+            Some(MIN_SPLIT_PIECE)
+        );
     }
 }

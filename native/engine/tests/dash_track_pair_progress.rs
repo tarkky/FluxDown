@@ -178,6 +178,7 @@ async fn track_pair_reports_midway_progress_with_real_total() {
     let params = DownloadParams {
         spawn_gen: 1,
         unattended: false,
+        preprobed: None,
         auto_proxy: None,
         multi_nic: None,
         task_id: "tp".to_string(),

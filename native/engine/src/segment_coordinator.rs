@@ -42,6 +42,10 @@ use tokio::sync::{Notify, mpsc};
 use tokio_util::sync::CancellationToken;
 
 mod multipath;
+mod request_path;
+mod splice_audit;
+
+use request_path::RequestPath;
 
 use crate::cdn::NodePool;
 use crate::db::Db;
@@ -464,8 +468,11 @@ const MAX_SEGMENTS: i32 = 512;
 // 在当前规模（找到服务器/链路的实际并发甜点）。分段规划不变——连接数 =
 // 存活 worker 数，与预切分段数解耦（段只是 worker 的工作队列）。
 
-/// 启动时的初始并发连接数（conservative ramp-up 起点）。
-const RAMP_INITIAL_WORKERS: usize = 2;
+/// 启动时的初始并发连接数（ramp-up 起点）。4 条与浏览器对同主机的常规并发
+/// 同量级（Chrome 6 条/主机），不会单凭起步触发反多线程风控；从 2 起步要多
+/// 一个 2s 评估窗才到 8 条，小文件 / 高 RTT 链路上大半时间都花在爬坡上
+/// （实测 GitHub 9.6MB：GD3 起步 8 条 7.5s，FD 起步 2 条 11.3s）。
+const RAMP_INITIAL_WORKERS: usize = 4;
 
 /// ramp 评估窗口间隔（秒）：每窗口测一次总吞吐，决定扩容/冻结。
 const RAMP_TICK_SECS: u64 = 2;
@@ -533,6 +540,34 @@ const RAMP_COLLAPSE_FACTOR: f64 = 0.5;
 /// （alive >= allowed）时计数，下载尾声 worker 自然退休导致的吞吐下降
 /// 不会误触发。
 const RAMP_SHRINK_STRIKES: u32 = 2;
+
+/// 持续劣化收缩的验证窗口数：收缩后这么多个完整窗口内，窗口吞吐须有一次超过
+/// 收缩时吞吐 × [`RAMP_IMPROVE_FACTOR`]，否则判定劣化来自链路噪声（代理抖动、
+/// 共享带宽）而非服务器对连接数的惩罚——撤销收缩并在本任务内停用该机制。
+const RAMP_SHRINK_EVAL_WINDOWS: u32 = 2;
+
+/// 收缩验证结论。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShrinkEval {
+    /// 证据不足，继续观察。
+    Pending,
+    /// 收缩后吞吐回升：确是连接数惩罚，保留收缩。
+    Confirmed,
+    /// 收缩没有带来回升：撤销收缩。
+    Revert,
+}
+
+/// 收缩验证判据：`shrunk_bps` 为触发收缩那一窗的吞吐，`best_bps` 为收缩后各
+/// 完整窗口的最高吞吐，`windows` 为已观察的完整窗口数。
+fn shrink_eval_verdict(shrunk_bps: f64, best_bps: f64, windows: u32) -> ShrinkEval {
+    if best_bps > shrunk_bps * RAMP_IMPROVE_FACTOR {
+        ShrinkEval::Confirmed
+    } else if windows >= RAMP_SHRINK_EVAL_WINDOWS {
+        ShrinkEval::Revert
+    } else {
+        ShrinkEval::Pending
+    }
+}
 
 /// 峰值吞吐参照的每窗口衰减系数：约 70 个窗口（2 分钟出头）半衰。
 /// 让持续劣化收缩的参照系跟随近期真实速度，而非被启动瞬间的突发窗口
@@ -664,6 +699,49 @@ fn hint_uncap_ceiling(
         .min(HINT_UNCAP_MAX)
         .min(MAX_SEGMENTS as usize);
     if target > base_cap { target } else { base_cap }
+}
+
+/// 任务内解封的线性度门槛：一次扩容让吞吐增幅 ≥ 连接增幅 × 该值，才认定瓶颈
+/// 是单连接速率（与 Ghost Downloader 自动提速的 0.8 判据同口径）。
+const RAMP_UNCAP_LINEARITY: f64 = 0.8;
+
+/// 任务内解封：额度刚升到天花板 `cap`，而这次 `pre_workers → workers` 的扩容
+/// 带来接近线性的增益——按连接限速的 CDN / 远程代理链路上，再多的连接仍在兑现
+/// 带宽，把天花板翻倍继续爬升（同 hint 解封钳在 [`HINT_UNCAP_MAX`]）。带宽已饱和
+/// 时增益远低于线性，天花板不动。剩余字节不足以喂饱翻倍后的连接（每条至少
+/// 2 × [`MIN_SPLIT_BYTES`]）时不解封。允许条件与 [`hint_uncap_ceiling`] 相同。
+#[allow(clippy::too_many_arguments)]
+fn in_task_uncap_ceiling(
+    allow: bool,
+    negative_cap: Option<i32>,
+    cap: usize,
+    pre_workers: usize,
+    workers: usize,
+    pre_bps: f64,
+    bps: f64,
+    remaining: i64,
+) -> usize {
+    if !allow || negative_cap.is_some() || workers < cap || pre_workers == 0 {
+        return cap;
+    }
+    if workers <= pre_workers || !(pre_bps > 0.0 && bps.is_finite()) {
+        return cap;
+    }
+    let conn_gain = workers as f64 / pre_workers as f64 - 1.0;
+    let rate_gain = bps / pre_bps - 1.0;
+    if rate_gain < conn_gain * RAMP_UNCAP_LINEARITY {
+        return cap;
+    }
+    let target = cap
+        .saturating_mul(2)
+        .min(HINT_UNCAP_MAX)
+        .min(MAX_SEGMENTS as usize);
+    let fed = target as i64 * 2 * MIN_SPLIT_BYTES;
+    if target > cap && remaining >= fed {
+        target
+    } else {
+        cap
+    }
 }
 
 /// 软冻结 +1 试探是否就绪（完整 tick 守卫，不含 awaiting 消费）。
@@ -828,6 +906,13 @@ const UI_REPORT_INTERVAL_MS: u128 = 200;
 const MAX_RETRIES: u32 = 5;
 const RETRY_BASE_DELAY: Duration = Duration::from_secs(2);
 
+/// 一次失败的尝试至少落盘这么多字节，才算「有实质进展」而重置段内重试预算。
+const RETRY_PROGRESS_RESET_BYTES: i64 = 256 * 1024;
+
+/// 段内瞬时失败总次数上限 = 重试预算 × 该倍数（进展重置预算时也不清零），
+/// 防止涓流服务器让单段无限重连。
+const RETRY_TOTAL_CEILING_FACTOR: u32 = 4;
+
 /// 多 CDN 钉定节点租约的段内重试预算（收紧版 MAX_RETRIES）。
 ///
 /// SYS 单节点时段内重试是唯一自愈手段，值得 5 次 × 指数退避（~80s）的耐心；
@@ -836,6 +921,14 @@ const RETRY_BASE_DELAY: Duration = Duration::from_secs(2);
 /// 下一次租借自然落到健康节点，故只留一次带短退避的就地重试（吸收单次
 /// 网络抖动），失败即上抛交给节点池切换。
 const PINNED_NODE_MAX_RETRIES: u32 = 2;
+
+/// 单段瞬时失败隔离次数上限：段内重试耗尽后、其它连接仍健康时，同一段最多
+/// 回队列重派这么多次；再失败按原语义上抛（整任务失败交由自动重试）。
+const SEGMENT_TRANSIENT_REQUEUE_MAX: u32 = 3;
+
+/// 全员 429 后单连接复活的次数上限（每次退避 = 基数 × 第几次：5s / 10s / 15s）。
+const ALL_REJECTED_REVIVE_MAX: u32 = 3;
+const ALL_REJECTED_REVIVE_BASE_DELAY: Duration = Duration::from_secs(5);
 
 /// 单个 chunk 的读取超时（stall detection）。如果超过此时间没有收到任何数据，
 /// 视为连接停滞，返回错误触发 retry 机制（断开旧连接，用 Range 请求从断点续传）。
@@ -865,13 +958,19 @@ const MIN_SYNC_GAP: Duration = Duration::from_secs(2);
 ///
 /// # 正确性契约
 ///
-/// [`FileSyncGate::sync_if_stale`] 返回一次【已完成】fdatasync 的**起始时刻** `S`。
-/// fdatasync 保证刷入所有在其【起始】前发起的写入，故凡在 `S` 之前完成的写入
-/// （其字节此刻已在 OS 页缓存）此刻均已持久化到磁盘。调用方须先 `file.flush()`
-/// 把自己的 BufWriter 落入页缓存、记下快照时刻 `snap_t`，**仅当** `S >= snap_t`
-/// 时才把该快照偏移写入 DB，从而维持 "DB 偏移 <= 已持久化字节" 不变式
-/// （BUG-COORD-FSYNC）。因判据用 fsync 的【起始】而非完成时刻，即便复用他段触发
-/// 的 fsync，也绝不会信任一次早于自身 flush 的 fsync（Windows 共享文件缓存同理）。
+/// 闸记录最近一次【已完成】fdatasync 的**起始时刻** `S`。fdatasync 保证刷入所有
+/// 在其【起始】前发起的写入，故凡在 `S` 之前完成的写入（其字节此刻已在 OS 页
+/// 缓存）此刻均已持久化到磁盘。调用方须先 `file.flush()` 把自己的 BufWriter 落入
+/// 页缓存、记下快照时刻 `snap_t`，**仅当** `S >= snap_t` 时才把该快照偏移写入
+/// DB，从而维持 "DB 偏移 <= 已持久化字节" 不变式（BUG-COORD-FSYNC）。因判据用
+/// fsync 的【起始】而非完成时刻，即便复用他段触发的 fsync，也绝不会信任一次早于
+/// 自身 flush 的 fsync（Windows 共享文件缓存同理）。
+///
+/// 周期落库走 [`FileSyncGate::kick_background`]：fdatasync 在阻塞线程池里跑，
+/// worker 不等它、继续读 socket，下个落库周期再按 `S` 提交已被覆盖的快照。
+/// macOS 上 `sync_data` 是 `F_FULLFSYNC`（实测 256MB 脏页 242ms），旧做法在读
+/// 循环里同步等待，每 3s 让所有连接停读一次。段完成用 [`FileSyncGate::sync_covering`]
+/// 同步等待覆盖，二者共享同一份状态与合并判据。
 #[derive(Clone)]
 struct FileSyncGate {
     inner: Arc<StdMutex<GateState>>,
@@ -883,6 +982,9 @@ struct GateState {
     syncing: bool,
     /// 最近一次【已完成】fdatasync 的起始时刻；None 表示尚无任何 fsync。
     last_completed_start: Option<Instant>,
+    /// 后台 fdatasync 失败（磁盘 I/O 错误、空间耗尽）：不会自愈，所有 worker
+    /// 在下个落库周期据此上抛。
+    failure: Option<(std::io::ErrorKind, String)>,
 }
 
 impl FileSyncGate {
@@ -891,57 +993,64 @@ impl FileSyncGate {
             inner: Arc::new(StdMutex::new(GateState {
                 syncing: false,
                 last_completed_start: None,
+                failure: None,
             })),
             notify: Arc::new(Notify::new()),
         }
     }
 
-    /// 合并式 fdatasync：若距上次【已完成】fsync 起始不足 [`MIN_SYNC_GAP`] 则跳过、
-    /// 复用其结果；否则（且无并发 fsync 在跑时）由本调用执行一次整盘 fdatasync。
-    /// 返回一次已完成 fsync 的**起始时刻**（见类型级正确性契约）。
-    async fn sync_if_stale(&self, file: &tokio::fs::File) -> std::io::Result<Instant> {
-        loop {
-            // 决策阶段：持锁判断，绝不跨 .await 持锁。
-            let do_sync = {
-                let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-                match st.last_completed_start {
-                    // 距最近一次已完成 fsync 起始不足 MIN_SYNC_GAP → 复用，跳过本次。
-                    Some(s) if s.elapsed() < MIN_SYNC_GAP => return Ok(s),
-                    // 无新鲜 fsync，但已有一次在进行 → 等待其完成后重判。
-                    _ if st.syncing => false,
-                    // 无新鲜 fsync 且无在途 → 由本调用执行。
-                    _ => {
-                        st.syncing = true;
-                        true
-                    }
-                }
-            };
+    /// 最近一次已完成 fdatasync 的起始时刻。
+    fn last_completed_start(&self) -> Option<Instant> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_completed_start
+    }
 
-            if do_sync {
-                // my_start 记于 fdatasync 之前：它是"覆盖判据"的时刻锚点。
-                let my_start = Instant::now();
-                let res = file.sync_data().await;
-                {
-                    let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-                    st.syncing = false;
-                    if res.is_ok() {
-                        st.last_completed_start = Some(my_start);
-                    }
-                }
-                self.notify.notify_waiters();
-                res?;
-                return Ok(my_start);
-            }
+    /// 后台 fdatasync 的失败（若有）。
+    fn failure(&self) -> Option<std::io::Error> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .failure
+            .as_ref()
+            .map(|(kind, message)| std::io::Error::new(*kind, message.clone()))
+    }
 
-            // 等待在途 fsync 完成后重判。带 50ms 兜底以规避 notify TOCTOU（与
-            // speed_limiter 相同处理）：notify_waiters 只唤醒已注册者，若通知在
-            // 注册前触发会丢失，超时确保下一轮必然重判，绝不永久阻塞。
-            tokio::select! {
-                biased;
-                () = self.notify.notified() => {}
-                () = tokio::time::sleep(Duration::from_millis(50)) => {}
+    /// 非阻塞合并式 fdatasync：无在途 fsync、且距上次已完成 fsync 起始已满
+    /// [`MIN_SYNC_GAP`]（或从未 fsync）时，在阻塞线程池发起一次整盘 fdatasync；
+    /// 否则什么都不做。立即返回，结果经 [`Self::last_completed_start`] /
+    /// [`Self::failure`] 观察。`file` 是同一文件的独立句柄（fdatasync 作用于 inode）。
+    fn kick_background(&self, file: &Arc<std::fs::File>) {
+        {
+            let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if st.syncing
+                || st
+                    .last_completed_start
+                    .is_some_and(|s| s.elapsed() < MIN_SYNC_GAP)
+            {
+                return;
             }
+            st.syncing = true;
         }
+        let gate = self.clone();
+        let file = Arc::clone(file);
+        tokio::task::spawn_blocking(move || {
+            // 起始时刻记于 fdatasync 之前：它是「覆盖判据」的时刻锚点。
+            let start = Instant::now();
+            // panic 也必须清掉 `syncing`，否则 sync_covering 会永远等这次 fsync。
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| file.sync_data()))
+                .unwrap_or_else(|_| Err(std::io::Error::other("background fdatasync panicked")));
+            {
+                let mut st = gate.inner.lock().unwrap_or_else(|e| e.into_inner());
+                st.syncing = false;
+                match res {
+                    Ok(()) => st.last_completed_start = Some(start),
+                    Err(error) => st.failure = Some((error.kind(), error.to_string())),
+                }
+            }
+            gate.notify.notify_waiters();
+        });
     }
 
     /// 覆盖式 fdatasync：返回的已完成 fdatasync 起始时刻 `S` **必须 ≥ `snap_t`**，
@@ -954,11 +1063,11 @@ impl FileSyncGate {
     /// 之前完成的写入均已被该次（或之后的）fdatasync 持久化——调用方据此才可把
     /// 对应偏移写入 DB，维持 "DB 偏移 <= 已持久化字节" 不变式（BUG-COORD-FSYNC）。
     ///
-    /// # 与 [`Self::sync_if_stale`] 的差异
+    /// # 与 [`Self::kick_background`] 的差异
     ///
-    /// 本方法**无视** [`MIN_SYNC_GAP`]：只要 `last_completed_start` 尚不存在或
-    /// `< snap_t`，就必须亲自执行一次新的 fdatasync（或等待在途完成后重判）。
-    /// 周期落库路径继续用 `sync_if_stale` 合并刷写；段完成等需要强一致覆盖的
+    /// 本方法**无视** [`MIN_SYNC_GAP`] 且同步等待：只要 `last_completed_start` 尚不
+    /// 存在或 `< snap_t`，就必须亲自执行一次新的 fdatasync（或等待在途完成后重判）。
+    /// 周期落库路径用 `kick_background` 在后台合并刷写；段完成等需要强一致覆盖的
     /// 路径用本方法。
     ///
     /// 并发完成者天然合并到同一次覆盖 fsync：若已有在途 sync，等待其结束后
@@ -1303,6 +1412,13 @@ async fn flush_source_bytes(
 #[derive(Default)]
 struct GenerationEvidence {
     tracker: TransferTracker,
+    /// 本次 generation 内是否有任一响应携带 ETag（强 validator，逐段比对过）。
+    etag_seen: AtomicBool,
+    /// 本次 generation 内是否有任一响应携带 Last-Modified。
+    lm_seen: AtomicBool,
+    /// 是否出现过「Last-Modified 变了、却因 Content-Range 总大小与起点一致而被当作
+    /// CDN edge 时钟差异容忍」的情形——版本可能已变但 HTTP 层判不出。
+    lm_drift_tolerated: AtomicBool,
 }
 
 impl GenerationEvidence {
@@ -1316,6 +1432,34 @@ impl GenerationEvidence {
 
     fn response_started(&self, index: i32) -> TransferGuard {
         self.tracker.start(index)
+    }
+
+    /// 记录一个成功响应携带的版本标识（空串 = 缺失）。
+    fn note_response_validators(&self, etag: &str, last_modified: &str) {
+        if !etag.is_empty() {
+            self.etag_seen.store(true, Ordering::Relaxed);
+        }
+        if !last_modified.is_empty() {
+            self.lm_seen.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// 记录一次被容忍的 Last-Modified 漂移。
+    fn note_lm_drift_tolerated(&self) {
+        self.lm_drift_tolerated.store(true, Ordering::Relaxed);
+    }
+
+    /// 完成前是否值得做一次内容采样审计（见 [`splice_audit`]）。仅在「确有嫌疑」时
+    /// 为真：没有任何 ETag 逐段比对过，且 ①探测基线带 ETag 却被分段 206 全部剥离，
+    /// ②基线只有 Last-Modified 却被剥离，或 ③出现过被容忍的 Last-Modified 漂移。
+    /// 从未有过任何版本基线、响应也无 validator 的任务（hint 无 validator）不审计。
+    fn content_audit_warranted(&self, baseline_etag: &str, baseline_last_modified: &str) -> bool {
+        if self.etag_seen.load(Ordering::Relaxed) {
+            return false;
+        }
+        !baseline_etag.is_empty()
+            || (!baseline_last_modified.is_empty() && !self.lm_seen.load(Ordering::Relaxed))
+            || self.lm_drift_tolerated.load(Ordering::Relaxed)
     }
 }
 
@@ -1342,6 +1486,7 @@ struct WorkerSpawnCtx {
     range_verdict: Arc<AtomicU8>,
     total_downloaded: Arc<AtomicI64>,
     generation_evidence: Arc<GenerationEvidence>,
+    request_path: Arc<RequestPath>,
     seg_states: Arc<StdMutex<Vec<SegmentProgressInfo>>>,
     db: Db,
     speed_limiter: SpeedLimiter,
@@ -1380,6 +1525,7 @@ impl WorkerSpawnCtx {
             self.range_verdict.clone(),
             self.total_downloaded.clone(),
             self.generation_evidence.clone(),
+            self.request_path.clone(),
             self.seg_states.clone(),
             self.db.clone(),
             self.speed_limiter.clone(),
@@ -1753,6 +1899,7 @@ pub async fn run_coordinated_download(
         segments.values().map(|s| s.downloaded_bytes).sum::<i64>(),
     ));
     let generation_evidence = Arc::new(GenerationEvidence::default());
+    let request_path = Arc::new(RequestPath::default());
 
     // 规划总大小的【共享可变】视图。worker 栈上的 i64 拷贝会在就地扩容后过期
     // （尾段 worker 拿旧值 → 对同一分母反复误报 TrueSizeLarger / 进度上报错误
@@ -1783,7 +1930,9 @@ pub async fn run_coordinated_download(
     // 本任务的连接数硬上限：规划段数 ∧ MAX_SEGMENTS ∧ 域名学习缓存；
     // 无负面 cap 且允许 hint 解封时，可再抬到 hint×2（见 hint_uncap_ceiling）。
     let start_hint: Option<usize> = domain_conn_hint(url).map(|h| h as usize);
-    let worker_cap = {
+    // 可变：Auto 默认档下若扩容到顶仍有接近线性的增益，任务内解封翻倍
+    // （见 in_task_uncap_ceiling）。
+    let mut worker_cap = {
         let mut cap = initial_segment_count.clamp(1, MAX_SEGMENTS) as usize;
         if let Some(domain_cap) = domain_conn_cap(url) {
             let dc = domain_cap.max(1) as usize;
@@ -1934,6 +2083,7 @@ pub async fn run_coordinated_download(
         reconnect_hostile: reconnect_hostile.clone(),
         total_downloaded: total_downloaded.clone(),
         generation_evidence: generation_evidence.clone(),
+        request_path: request_path.clone(),
         range_verdict: range_verdict.clone(),
         seg_states: seg_states.clone(),
         db: db.clone(),
@@ -2043,6 +2193,9 @@ pub async fn run_coordinated_download(
     let mut last_throughput_bytes = total_downloaded.load(Ordering::Relaxed);
     let mut last_throughput_time = Instant::now();
     let mut current_min_split = MIN_SPLIT_BYTES;
+    // 与 current_min_split 同节拍刷新的单连接速率估计，供拆分代价模型在逐段
+    // 速率样本出现前使用（见 SplitCost::conn_bps）。
+    let mut conn_bps_hint: Option<f64> = None;
 
     // Proactive split timer: pre-create Pending segments so the next idle
     // worker can pick one up immediately without a split in the hot path.
@@ -2055,6 +2208,18 @@ pub async fn run_coordinated_download(
     let mut freeze = FreezeState::Active;
     // 分级降级计数：第 1 次拒绝 → 乘性减半（保留存活连接）；第 2 次 → 串行模式。
     let mut reject_strikes: u32 = 0;
+    // 单段瞬时失败隔离计数（seg_index → 已隔离次数），见 SEGMENT_TRANSIENT_REQUEUE_MAX。
+    let mut transient_requeues: HashMap<i32, u32> = HashMap::new();
+    // 首次拒绝乘性降额后的额度：此后仍高于它的在途连接被拒视为兑现那次降额
+    // （shedding），而非新的拒绝证据。未降额过 = usize::MAX（永不 shedding）。
+    let mut reject_quota: usize = usize::MAX;
+    // 任务内解封前的连接天花板（None = 未解封或已回退）。解封后的超额连接被拒
+    // 是越界证据而非连接压力：回退到它，不计拒绝、不写域名缓存，本任务不再解封。
+    let mut uncap_floor: Option<usize> = None;
+    let mut uncap_disabled = false;
+    // 全员 429 后的单连接复活：到点由 ramp tick 派一个 worker 续传 Pending 段。
+    let mut revive_at: Option<Instant> = None;
+    let mut revives_used: u32 = 0;
     // 上个 ramp tick 刚扩容，本 tick 用窗口吞吐评估扩容效果。
     let mut awaiting_ramp_eval = false;
     // 当前 awaiting 是否为软冻结 +1 试探窗（非倍增）。试探失败不写域名缓存。
@@ -2069,6 +2234,10 @@ pub async fn run_coordinated_download(
     // 持续劣化计数：连续 RAMP_SHRINK_STRIKES 个窗口跌破峰值 × RAMP_COLLAPSE_FACTOR
     // 时乘性收缩。吞吐恢复即清零。
     let mut shrink_strikes: u32 = 0;
+    // 收缩验证：Some((收缩前额度, 收缩那一窗吞吐, 收缩后最高窗口吞吐, 已观察窗口数))。
+    let mut shrink_eval: Option<(usize, f64, f64, u32)> = None;
+    // 一次收缩被证伪（吞吐没有回升）后，本任务不再做持续劣化收缩。
+    let mut shrink_disabled = false;
     // 正面学习：任务内【无拒绝窗口】观察到的最大存活连接数。任务无拒绝
     // 成功完成时作为同域名起步提示落盘（见函数末尾第 9 步）。
     let mut proven_scale: usize = 0;
@@ -2188,6 +2357,12 @@ pub async fn run_coordinated_download(
                                 let delta = (current_bytes - last_throughput_bytes).max(0) as f64;
                                 let throughput = delta / elapsed.as_secs_f64();
                                 current_min_split = dynamic_min_split_bytes(throughput);
+                                let transferring = segments
+                                    .values()
+                                    .filter(|s| s.state == SegState::Active)
+                                    .count();
+                                conn_bps_hint = (throughput > 0.0 && transferring > 0)
+                                    .then(|| throughput / transferring as f64);
                                 last_throughput_bytes = current_bytes;
                                 last_throughput_time = now;
                             }
@@ -2216,6 +2391,7 @@ pub async fn run_coordinated_download(
                                 &mut next_index,
                                 effective_total_bytes,
                                 current_min_split,
+                                split_cost(&request_path, conn_bps_hint),
                             )
                         };
 
@@ -2431,6 +2607,7 @@ pub async fn run_coordinated_download(
                                     &mut next_index,
                                     effective_total_bytes,
                                     current_min_split,
+                                    split_cost(&request_path, conn_bps_hint),
                                 )
                             };
                             if let Some(next) = next_work {
@@ -2519,6 +2696,7 @@ pub async fn run_coordinated_download(
                                     &mut next_index,
                                     effective_total_bytes,
                                     current_min_split,
+                                    split_cost(&request_path, conn_bps_hint),
                                 )
                             };
                             if let Some(next) = next_work {
@@ -2561,6 +2739,62 @@ pub async fn run_coordinated_download(
                             continue;
                         }
 
+                        // --- 单段瞬时失败隔离 ------------------------------------
+                        // 段内重试预算耗尽的瞬时错误（断流 / 停滞 / 连接重置 / 5xx，
+                        // 判据与任务级自动重试同源）而其它已验证响应仍在传 body：
+                        // 是这一条连接 / 这一跳链路坏了，不是服务器不可用。把段放回
+                        // Pending、退休本 worker（下个 ramp tick 按额度补一个新连接），
+                        // 其余连接照常下载。旧逻辑直接整任务失败，再由管理器自动重试
+                        // 从 4 条连接重新爬坡——代理链路抖动时速度呈锯齿。每段最多
+                        // 隔离 SEGMENT_TRANSIENT_REQUEUE_MAX 次，超出仍按原语义上抛。
+                        if !serial_mode
+                            && !reconnect_hostile.load(Ordering::Relaxed)
+                            && range_verdict.load(Ordering::Relaxed) == RANGE_VERDICT_SUPPORTED
+                            && !is_server_rejection(&error)
+                            && !is_http_400(&error)
+                            && generation_evidence.has_active_response()
+                            // 本地 I/O / DB 失败走的是不做检查点的 `?` 出口：共享进度可能
+                            // 领先于真正落入文件的字节（BufWriter 未刷即丢弃），按共享进度
+                            // 重派会留下空洞。这类错误也不是链路问题，交原语义处置。
+                            && !matches!(error, DownloadError::Io(_) | DownloadError::Db(_))
+                            && crate::download_manager::is_retriable_error(
+                                &crate::downloader::download_error_chain_text(&error),
+                            )
+                        {
+                            let used = transient_requeues.entry(seg_index).or_insert(0);
+                            if *used < SEGMENT_TRANSIENT_REQUEUE_MAX {
+                                *used += 1;
+                                log_info!(
+                                    "[coordinator] task {} seg {} 瞬时失败隔离（第 {}/{} 次）：\
+                                     其它连接仍在传输，段回队列由新连接接手：{}",
+                                    task_id,
+                                    seg_index,
+                                    *used,
+                                    SEGMENT_TRANSIENT_REQUEUE_MAX,
+                                    error
+                                );
+                                sync_downloaded_from_shared(&mut segments, &seg_states);
+                                if let Some(seg) = segments.get_mut(&seg_index) {
+                                    seg.rate_bps = None;
+                                    seg.state = if seg.remaining() == 0 {
+                                        SegState::Completed
+                                    } else {
+                                        SegState::Pending
+                                    };
+                                }
+                                if let Some(slot) = worker_assign_txs.get_mut(worker_id) {
+                                    *slot = None;
+                                }
+                                if all_done(&segments) {
+                                    for tx in &mut worker_assign_txs {
+                                        *tx = None;
+                                    }
+                                    break;
+                                }
+                                continue;
+                            }
+                        }
+
                         // 失败处置分三类：
                         //   (1) 403/429/400 拒绝，且本 generation 还有其它请求在途；
                         //   (2) 任务已有可保留 Range 进度后偶发 200 全量响应；
@@ -2582,12 +2816,68 @@ pub async fn run_coordinated_download(
                         let server_rejection = is_server_rejection(&error);
                         // 400 可参与当前任务降级，但语义宽泛，永不写域名连接缓存。
                         let conn_rejection = server_rejection || is_http_400(&error);
+                        // ---- 全员 429 后单连接复活 ----
+                        // 最后一条在途连接也被 429（按 IP 的请求速率 / 并发窗口），但已有
+                        // 进度：限流窗口过去后单连接通常就能继续（USTC 实测全员 429 后
+                        // 单连接 100 MB/s）。退避后由 ramp tick 派一个 worker 续传，而不是
+                        // 立刻失败——那会让 manager 隔 5s 从头爬坡重来。复活次数有上限，
+                        // 用完仍被拒才走下方原有的致命出口。
+                        if is_http_429(&error)
+                            && any_data
+                            && !other_in_flight
+                            && revives_used < ALL_REJECTED_REVIVE_MAX
+                        {
+                            revives_used += 1;
+                            let delay = ALL_REJECTED_REVIVE_BASE_DELAY * revives_used;
+                            serial_mode = true;
+                            freeze = FreezeState::Hard;
+                            awaiting_ramp_eval = false;
+                            probe_window = false;
+                            if let Some(seg) = segments.get_mut(&seg_index) {
+                                seg.rate_bps = None;
+                                seg.state = SegState::Pending;
+                            }
+                            if let Some(slot) = worker_assign_txs.get_mut(worker_id) {
+                                *slot = None;
+                            }
+                            revive_at = Some(Instant::now() + delay);
+                            log_info!(
+                                "[coordinator] task {} seg {} 全部连接被 429，{:?} 后单连接复活（{}/{}）",
+                                task_id,
+                                seg_index,
+                                delay,
+                                revives_used,
+                                ALL_REJECTED_REVIVE_MAX
+                            );
+                            continue;
+                        }
                         if (conn_rejection && other_in_flight) || transient_range {
                             // ---- 分级自适应降级 ----
                             // 第 1 次拒绝且存活连接充足：乘性减半连接额度，冻结扩容，
                             // 保留所有存活连接（超额部分完成当前段后自然退休）；
                             // 再次拒绝（或本就只有 <=2 条连接）才降到串行模式。
-                            reject_strikes += 1;
+                            let alive = worker_assign_txs
+                                .iter()
+                                .filter(|tx| tx.is_some())
+                                .count();
+                            // 降额后仍在途的超额连接（同一扩容批次一起被拒的请求）
+                            // 被拒，只是在兑现上一次降额，不是「降额后仍被拒」的新
+                            // 证据：只退休本 worker，不再升级为串行 / 单连接缓存。
+                            // 实测 Hetzner 每 IP 限 5 连接：4→8 扩容的 4 条新连接
+                            // 几乎同时 429，旧逻辑第 2 条就把任务打成串行并写入
+                            // 24h 单连接缓存，速度从 4 连接跌到 1 连接。
+                            // reject_quota 只在降额 / 解封回退后才小于 usize::MAX。
+                            let shedding_excess =
+                                !transient_range && !serial_mode && alive > reject_quota;
+                            // 解封越过 advisor 天花板后的首个拒绝：越界的是本任务自己
+                            // 加出来的连接（实测 USTC 16 条正常、16→32 后 429），回退到
+                            // 解封前的天花板，不算拒绝、不学习域名上限。
+                            let overshoot_floor = uncap_floor.filter(|&floor| {
+                                !shedding_excess && !transient_range && !serial_mode && alive > floor
+                            });
+                            if !shedding_excess && overshoot_floor.is_none() {
+                                reject_strikes += 1;
+                            }
                             freeze = FreezeState::Hard;
                             awaiting_ramp_eval = false;
                             probe_window = false;
@@ -2596,12 +2886,31 @@ pub async fn run_coordinated_download(
                             } else {
                                 "server-rejection"
                             };
-                            let alive = worker_assign_txs
-                                .iter()
-                                .filter(|tx| tx.is_some())
-                                .count();
-                            if !serial_mode && reject_strikes == 1 && alive > 2 {
+                            if let Some(floor) = overshoot_floor {
+                                worker_cap = floor;
+                                allowed_workers = floor;
+                                reject_quota = floor;
+                                uncap_floor = None;
+                                uncap_disabled = true;
+                                log_info!(
+                                    "[adaptive] task {} seg {} 解封越界被拒：{} alive -> 回退到解封前上限 {}",
+                                    task_id,
+                                    seg_index,
+                                    alive,
+                                    floor
+                                );
+                            } else if shedding_excess {
+                                log_info!(
+                                    "[adaptive] task {} seg {} rejected while shedding excess \
+                                     connections ({} alive > {} allowed); retiring worker only",
+                                    task_id,
+                                    seg_index,
+                                    alive,
+                                    allowed_workers
+                                );
+                            } else if !serial_mode && reject_strikes == 1 && alive > 2 {
                                 allowed_workers = (alive / 2).max(1);
+                                reject_quota = allowed_workers;
                                 log_info!(
                                     "[adaptive] task {} ramp down: {} -> {}, reason={}, \
                                      preserve_active=true",
@@ -2774,6 +3083,7 @@ pub async fn run_coordinated_download(
                                 &mut next_index,
                                 effective_total_bytes,
                                 current_min_split,
+                                split_cost(&request_path, conn_bps_hint),
                             )
                         };
                         if let Some(next) = next_work {
@@ -2885,6 +3195,7 @@ pub async fn run_coordinated_download(
                         &mut segments,
                         &mut next_index,
                         current_min_split,
+                        split_cost(&request_path, conn_bps_hint),
                     )
                     .or_else(|| {
                         if current_min_split > TAIL_MIN_SPLIT_BYTES {
@@ -2904,6 +3215,7 @@ pub async fn run_coordinated_download(
                                     &mut segments,
                                     &mut next_index,
                                     TAIL_MIN_SPLIT_BYTES,
+                                    split_cost(&request_path, conn_bps_hint),
                                 )
                             } else {
                                 None
@@ -2953,6 +3265,51 @@ pub async fn run_coordinated_download(
                 }
                 let mut alive = worker_assign_txs.iter().filter(|t| t.is_some()).count();
 
+                // 全员 429 复活：退避到点、无存活 worker 时派一个 worker 领 Pending 段。
+                if let Some(at) = revive_at
+                    && now >= at
+                {
+                    revive_at = None;
+                    sync_downloaded_from_shared(&mut segments, &seg_states);
+                    if alive == 0
+                        && let Some(next) = find_next_work(
+                            &mut segments,
+                            &mut next_index,
+                            effective_total_bytes,
+                            current_min_split,
+                            split_cost(&request_path, conn_bps_hint),
+                        )
+                    {
+                        let new_seg_idx = next.assignment.seg_index;
+                        if let Err(error) = persist_segment_change(
+                            db, task_id, &segments,
+                            new_seg_idx, next.split_parent,
+                        ).await {
+                            worker_cancel.cancel();
+                            for tx in &mut worker_assign_txs { *tx = None; }
+                            final_error = Some(error);
+                            break 'coordinator;
+                        }
+                        rebuild_seg_states(&segments, &seg_states);
+                        let worker_id = worker_assign_txs.len();
+                        let (assign_tx, handle) = ctx.spawn(worker_id);
+                        if assign_tx.try_send(next.assignment).is_err() {
+                            if let Some(seg) = segments.get_mut(&new_seg_idx) {
+                                seg.state = SegState::Pending;
+                            }
+                        } else {
+                            worker_assign_txs.push(Some(assign_tx));
+                            worker_handles.push(Some(handle));
+                            alive += 1;
+                            log_info!(
+                                "[coordinator] task {} 单连接复活：seg {}",
+                                task_id,
+                                new_seg_idx
+                            );
+                        }
+                    }
+                }
+
                 // 短窗口守卫（open-ended 即时放队后常见）：只做对账 + 按当前
                 // 额度补队，跳过吞吐采样/评估/shrink/扩容，且不推进 ramp_last_*
                 // ——保证下个整窗测速干净。awaiting 顺延到下个整窗消费。
@@ -2968,6 +3325,7 @@ pub async fn run_coordinated_download(
                                 &mut next_index,
                                 effective_total_bytes,
                                 current_min_split,
+                                split_cost(&request_path, conn_bps_hint),
                             ) else {
                                 break;
                             };
@@ -3001,7 +3359,7 @@ pub async fn run_coordinated_download(
                             alive += 1;
                         }
                     }
-                    if alive == 0 && !all_done(&segments) {
+                    if alive == 0 && revive_at.is_none() && !all_done(&segments) {
                         log_info!(
                             "[coordinator] task {} 所有 worker 已退出但任务未完成，退出事件循环",
                             task_id
@@ -3069,6 +3427,7 @@ pub async fn run_coordinated_download(
                         &mut segments,
                         &mut next_index,
                         2 * crate::path_scheduler::EXPLORE_MIN_PIECE,
+                        split_cost(&request_path, conn_bps_hint),
                     )
                 {
                     let new_seg_idx = next.assignment.seg_index;
@@ -3177,6 +3536,34 @@ pub async fn run_coordinated_download(
                             match verdict {
                                 RampVerdict::Improved => {
                                     beneficial_scale = allowed_workers;
+                                    let uncapped = in_task_uncap_ceiling(
+                                        allow_hint_uncap
+                                            && !uncap_disabled
+                                            && reject_strikes == 0,
+                                        domain_conn_cap(url),
+                                        worker_cap,
+                                        pre_grow_workers,
+                                        allowed_workers,
+                                        pre_grow_throughput,
+                                        throughput,
+                                        remaining,
+                                    );
+                                    if uncapped > worker_cap {
+                                        log_info!(
+                                            "[adaptive] task {} 任务内解封：{} -> {} conns \
+                                             上限（{} -> {} 连接吞吐 {:.0} -> {:.0} B/s，\
+                                             近线性增益）",
+                                            task_id,
+                                            worker_cap,
+                                            uncapped,
+                                            pre_grow_workers,
+                                            allowed_workers,
+                                            pre_grow_throughput,
+                                            throughput
+                                        );
+                                        uncap_floor.get_or_insert(worker_cap);
+                                        worker_cap = uncapped;
+                                    }
                                 }
                                 RampVerdict::Collapse => {
                                     freeze = FreezeState::Hard;
@@ -3236,6 +3623,43 @@ pub async fn run_coordinated_download(
                         }
                     }
 
+                    // 2a'. 验证上一次持续劣化收缩：收缩后吞吐没有回升说明劣化
+                    //      不是连接数惩罚（实测代理链路噪声让 Hetzner 任务 2 -> 1
+                    //      连接后速度更低），撤销收缩并停用本任务的收缩机制。
+                    if let Some((pre_workers, shrunk_bps, best_bps, windows)) = shrink_eval {
+                        if tail || migrating {
+                            shrink_eval = None;
+                        } else if alive > allowed_workers {
+                            // 收缩尚未生效：超额连接要做完手头的段才退休，这些窗口的
+                            // 吞吐仍是旧规模的，不计入验证。
+                        } else {
+                            let best_bps = best_bps.max(throughput);
+                            let windows = windows + 1;
+                            match shrink_eval_verdict(shrunk_bps, best_bps, windows) {
+                                ShrinkEval::Pending => {
+                                    shrink_eval = Some((pre_workers, shrunk_bps, best_bps, windows));
+                                }
+                                ShrinkEval::Confirmed => shrink_eval = None,
+                                ShrinkEval::Revert => {
+                                    shrink_eval = None;
+                                    shrink_disabled = true;
+                                    let old = allowed_workers;
+                                    allowed_workers = pre_workers.min(worker_cap).max(allowed_workers);
+                                    shrunk_this_tick = true;
+                                    log_info!(
+                                        "[adaptive] task {} 撤销持续劣化收缩：{} -> {} conns \
+                                         （收缩后最高 {:.0} B/s 未超过收缩时 {:.0} B/s，判为链路噪声）",
+                                        task_id,
+                                        old,
+                                        allowed_workers,
+                                        best_bps,
+                                        shrunk_bps
+                                    );
+                                }
+                            }
+                        }
+                    }
+
                     // 2b. 持续劣化收缩：以峰值窗口吞吐为参照。仅在非扩容评估期
                     //     （冻结后或额度已到顶——起步即被惩罚时扩容评估从未发生）
                     //     且存活数恰等于额度时计数：alive < allowed 是下载尾声
@@ -3254,6 +3678,8 @@ pub async fn run_coordinated_download(
                         shrink_strikes = 0;
                     } else if !tail
                         && !migrating
+                        && !shrink_disabled
+                        && shrink_eval.is_none()
                         && should_shrink(
                             throughput,
                             peak_throughput,
@@ -3271,6 +3697,7 @@ pub async fn run_coordinated_download(
                             allowed_workers = (allowed_workers / 2).max(1);
                             beneficial_scale = beneficial_scale.min(allowed_workers);
                             shrunk_this_tick = true;
+                            shrink_eval = Some((old, throughput, 0.0, 0));
                             // 收缩后至少进入 Soft 冷却，避免下一完整 tick 立即倍增回
                             // 原额度；冷却/试探期间仍劣化则升级 Hard。
                             freeze = sustained_shrink_next_state(freeze, soft_probe_task_used);
@@ -3303,6 +3730,7 @@ pub async fn run_coordinated_download(
                                 &mut next_index,
                                 effective_total_bytes,
                                 current_min_split,
+                                split_cost(&request_path, conn_bps_hint),
                             ) else {
                                 break;
                             };
@@ -3407,7 +3835,7 @@ pub async fn run_coordinated_download(
                 //    不再触发 channel 关闭。若无存活 worker、任务未完成且上面的
                 //    补充循环也无法开工，退出事件循环——交由第 8 步完整性检查
                 //    报错，与旧实现 channel-close 路径语义等价。
-                if alive == 0 && !all_done(&segments) {
+                if alive == 0 && revive_at.is_none() && !all_done(&segments) {
                     log_info!(
                         "[coordinator] task {} 所有 worker 已退出但任务未完成，退出事件循环",
                         task_id
@@ -3577,6 +4005,40 @@ pub async fn run_coordinated_download(
         return Err(DownloadError::Other(format!(
             "coordinator: post-download coverage error: {}",
             msg
+        )));
+    }
+
+    // 确有嫌疑的多段下载（探测基线带 validator 却被分段 206 剥离 / 出现被容忍的
+    // Last-Modified 漂移，见 `content_audit_warranted`）：HTTP 层无 ETag 可逐段比对
+    // （If-Range 按设计不发），文件中途被替换会静默拼成新旧混合的损坏文件。以内容
+    // 采样补一道审计；仅在拿到确凿矛盾时判 VersionChanged（上层清盘后单流重下新
+    // 版本），审计本身失败/无结论一律放行；每个任务至多一次审计触发的重下。
+    // 配额型端点（发生过吸收合并、新连接必被拒）不再额外打扰：审计请求注定被拒且可能
+    // 消耗 token。
+    if segments.len() > 1
+        && generation_evidence.content_audit_warranted(etag, last_modified)
+        && splice_audit::redownload_allowed(task_id)
+        && !reconnect_hostile.load(Ordering::Relaxed)
+        && let Some(client) = nodes.sys_client()
+        && let Some(offset) = splice_audit::find_version_mismatch(
+            &client,
+            url,
+            spec.as_ref(),
+            dest,
+            effective_total_bytes,
+            cancel_token,
+        )
+        .await
+    {
+        splice_audit::record_redownload(task_id);
+        log_info!(
+            "[coordinator] task {} 版本证据缺失，完成后内容采样在偏移 {} 处与服务器当前版本不符——文件在下载中被替换，回退重下",
+            task_id,
+            offset
+        );
+        return Err(DownloadError::VersionChanged(format!(
+            "post-download content audit: bytes at offset {offset} differ from the server's \
+             current version (no ETag was available to detect a mid-download replacement)"
         )));
     }
 
@@ -3948,6 +4410,7 @@ fn find_next_work(
     next_index: &mut i32,
     _total_bytes: i64,
     min_split: i64,
+    cost: SplitCost,
 ) -> Option<NextWork> {
     // Strategy 1: existing Pending segment.
     if let Some(seg) = segments.values().find(|s| s.state == SegState::Pending) {
@@ -3970,7 +4433,7 @@ fn find_next_work(
     }
 
     // Strategy 2: split the largest active segment at the dynamic threshold.
-    if let Some(work) = try_split_largest(segments, next_index, min_split) {
+    if let Some(work) = try_split_largest(segments, next_index, min_split, cost) {
         return Some(work);
     }
 
@@ -4008,7 +4471,7 @@ fn find_next_work(
             .max()
             .unwrap_or(0);
         if max_remaining >= 2 * TAIL_MIN_SPLIT_BYTES {
-            try_split_largest(segments, next_index, TAIL_MIN_SPLIT_BYTES)
+            try_split_largest(segments, next_index, TAIL_MIN_SPLIT_BYTES, cost)
         } else {
             None
         }
@@ -4041,21 +4504,42 @@ fn find_next_pending_only(segments: &mut BTreeMap<i32, LiveSegment>) -> Option<N
     })
 }
 
+/// 拆分的代价模型输入。
+#[derive(Clone, Copy, Default)]
+struct SplitCost {
+    /// 帮手从发出请求到收到响应头的耗时估计（秒，实测 EWMA；0 = 无样本）。
+    setup_secs: f64,
+    /// 逐段速率尚无样本（首个完整采样窗之前、短任务全程）时的单连接速率估计：
+    /// 近期总吞吐 / 在传分段数。
+    conn_bps: Option<f64>,
+}
+
+fn split_cost(request_path: &RequestPath, conn_bps: Option<f64>) -> SplitCost {
+    SplitCost {
+        setup_secs: request_path.setup_secs(),
+        conn_bps,
+    }
+}
+
 /// 拆分规划：挑选预计完成最晚的活动段（ECF：持有连接实测速率未知时按
-/// 当前最快连接速率估计，全部未知时退化为剩余字节最多），按持有者与帮手
-/// （当前最快连接）的速率比例切分剩余区间使双方同时完成（DEMS 均衡完成；
-/// 速率未知时为中点）。返回 `(段索引, 当前位置, 剩余字节, 拆分点)`；
-/// 无可拆段或拆分点非法 → `None`。
+/// 当前最快连接速率估计，全部未知时按 `cost.conn_bps`，再无则退化为剩余字节
+/// 最多），按持有者与帮手（当前最快连接）的速率比例切分剩余区间使双方同时
+/// 完成（DEMS 均衡完成；速率未知时为中点），并计入帮手的请求建立耗时：持有者
+/// 在帮手收到首字节前就能下完时不拆（见
+/// [`crate::path_scheduler::split_keep_with_setup`]）。返回
+/// `(段索引, 当前位置, 剩余字节, 拆分点)`；无可拆段或拆分点非法 → `None`。
 fn plan_split(
     segments: &BTreeMap<i32, LiveSegment>,
     min_split: i64,
+    cost: SplitCost,
 ) -> Option<(i32, i64, i64, i64)> {
     let helper_bps = segments
         .values()
         .filter(|s| s.state == SegState::Active)
         .filter_map(|s| s.rate_bps)
         .filter(|r| *r > 0.0)
-        .max_by(f64::total_cmp);
+        .max_by(f64::total_cmp)
+        .or(cost.conn_bps.filter(|r| *r > 0.0));
     let expected_finish = |s: &LiveSegment| -> f64 {
         match helper_bps {
             Some(helper) => {
@@ -4079,7 +4563,12 @@ fn plan_split(
     if remaining < min_split {
         return None;
     }
-    let keep = crate::path_scheduler::balanced_keep(remaining, best.rate_bps, helper_bps);
+    let keep = crate::path_scheduler::split_keep_with_setup(
+        remaining,
+        best.rate_bps.or(helper_bps),
+        helper_bps,
+        cost.setup_secs,
+    )?;
     let split_point = current_pos + keep;
     // Validate: split_point must be within (current_pos, end_byte].
     // This guarantees both halves are non-empty.
@@ -4100,6 +4589,7 @@ fn try_split_largest(
     segments: &mut BTreeMap<i32, LiveSegment>,
     next_index: &mut i32,
     min_split: i64,
+    cost: SplitCost,
 ) -> Option<NextWork> {
     // Only count non-Completed segments — Completed slots do not contribute
     // to the concurrent-connection limit. This allows idle workers to keep
@@ -4112,7 +4602,7 @@ fn try_split_largest(
         return None;
     }
 
-    let (best_idx, current_pos, remaining, split_point) = plan_split(segments, min_split)?;
+    let (best_idx, current_pos, remaining, split_point) = plan_split(segments, min_split, cost)?;
     let old_end = segments.get(&best_idx)?.end_byte;
 
     // New segment covers [split_point, old_end].
@@ -4179,6 +4669,7 @@ fn try_proactive_split(
     segments: &mut BTreeMap<i32, LiveSegment>,
     next_index: &mut i32,
     min_split: i64,
+    cost: SplitCost,
 ) -> Option<NextWork> {
     // Do nothing if there's already a pending segment waiting for a worker.
     if segments.values().any(|s| s.state == SegState::Pending) {
@@ -4196,7 +4687,7 @@ fn try_proactive_split(
         return None;
     }
 
-    let (best_idx, _current_pos, _remaining, split_point) = plan_split(segments, min_split)?;
+    let (best_idx, _current_pos, _remaining, split_point) = plan_split(segments, min_split, cost)?;
     let old_end = segments.get(&best_idx)?.end_byte;
     let new_index = *next_index;
     *next_index += 1;
@@ -4256,6 +4747,16 @@ fn all_done(segments: &BTreeMap<i32, LiveSegment>) -> bool {
 // ---------------------------------------------------------------------------
 // Helpers: shared state synchronization
 // ---------------------------------------------------------------------------
+
+/// 共享 seg_states 中某段的位置。向量恒由 `BTreeMap` 按段索引升序重建
+/// （[`build_seg_state_vec`] / [`rebuild_seg_states`]），worker 每个 chunk 查两次，
+/// 二分查找把 64～512 段时的线性扫描降到对数；顺序不变式意外被破坏时退回线性扫描。
+fn seg_state_pos(states: &[SegmentProgressInfo], seg_idx: i32) -> Option<usize> {
+    states
+        .binary_search_by_key(&seg_idx, |s| s.index)
+        .ok()
+        .or_else(|| states.iter().position(|s| s.index == seg_idx))
+}
 
 /// Build a fresh `Vec<SegmentProgressInfo>` from the segment map.
 fn build_seg_state_vec(segments: &BTreeMap<i32, LiveSegment>) -> Vec<SegmentProgressInfo> {
@@ -4525,6 +5026,7 @@ fn spawn_worker(
     range_verdict: Arc<AtomicU8>,
     total_downloaded: Arc<AtomicI64>,
     generation_evidence: Arc<GenerationEvidence>,
+    request_path: Arc<RequestPath>,
     seg_states: Arc<StdMutex<Vec<SegmentProgressInfo>>>,
     db: Db,
     speed_limiter: SpeedLimiter,
@@ -4588,6 +5090,7 @@ fn spawn_worker(
                 &event_tx,
                 &total_downloaded,
                 &generation_evidence,
+                &request_path,
                 &planned_total,
                 size_is_estimate,
                 &first_validators,
@@ -4747,6 +5250,15 @@ const RESPONSE_HEADER_TIMEOUT: Duration = Duration::from_secs(30);
 /// 吸收合并后的唯一生命线（重连必被拒）：响应头等待更宽容。
 const RESPONSE_HEADER_TIMEOUT_HOSTILE: Duration = Duration::from_secs(90);
 
+/// HTTP 429 Too Many Requests 判定：明确的限流信号，窗口过去后同一请求可成功。
+fn is_http_429(e: &DownloadError) -> bool {
+    matches!(
+        e,
+        DownloadError::Request(req_err)
+            if req_err.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS)
+    )
+}
+
 /// HTTP 400 Bad Request 判定。
 ///
 /// 配额型下载端点（fnOS `multiple-download?token=`：一个 token 只允许固定次数
@@ -4786,6 +5298,7 @@ async fn do_segment_with_retry(
     event_tx: &mpsc::Sender<WorkerEvent>,
     total_downloaded: &AtomicI64,
     generation_evidence: &GenerationEvidence,
+    request_path: &RequestPath,
     planned_total: &AtomicI64,
     size_is_estimate: bool,
     first_validators: &StdMutex<Option<(String, String)>>,
@@ -4801,6 +5314,8 @@ async fn do_segment_with_retry(
     spawn_gen: i64,
 ) -> Result<i64, DownloadError> {
     let mut attempts = 0u32;
+    // 本段累计瞬时失败次数（进展重置预算时也不清零），封顶见 RETRY_TOTAL_CEILING_FACTOR。
+    let mut total_failures = 0u32;
     // open-ended 首响应 Established 事件 latch：整段重试生命周期内只发一次。
     let mut open_ended_established_sent = false;
 
@@ -4825,6 +5340,7 @@ async fn do_segment_with_retry(
             event_tx,
             total_downloaded,
             generation_evidence,
+            request_path,
             planned_total,
             size_is_estimate,
             first_validators,
@@ -4926,8 +5442,30 @@ async fn do_segment_with_retry(
                     );
                     return Err(e);
                 }
+                // Recover actual_start *and* seg_end from DB for partial progress.
+                // seg_end may have been shrunk by a coordinator split since we started.
+                let attempt_start = actual_start;
+                let segs = db.load_segments(task_id).await?;
+                if let Some(seg) = segs.iter().find(|s| s.index == seg_idx) {
+                    seg_end = seg.end_byte;
+                    actual_start = seg_start + seg.downloaded_bytes;
+                    if actual_start > seg_end {
+                        // Segment completed during previous attempt.
+                        return Ok(seg.downloaded_bytes);
+                    }
+                }
+                // 预算按「连续无实质进展的失败」计：本次尝试落盘超过
+                // RETRY_PROGRESS_RESET_BYTES（慢链路上常见的下一段 → 停滞 → 重连）就
+                // 重新计数，不让长时间下载因零星断流累计耗尽预算而整段失败；涓流式
+                // 「每次只给一块就断」的服务器既重置不了预算，也受总次数封顶约束。
+                total_failures += 1;
+                if actual_start - attempt_start >= RETRY_PROGRESS_RESET_BYTES {
+                    attempts = 0;
+                }
                 attempts += 1;
-                if attempts >= max_retries {
+                if attempts >= max_retries
+                    || total_failures >= max_retries.saturating_mul(RETRY_TOTAL_CEILING_FACTOR)
+                {
                     return Err(e);
                 }
                 // 瞬时失败必须留痕：截断/停滞/网络错误此前静默进退避，日志里
@@ -4940,17 +5478,6 @@ async fn do_segment_with_retry(
                     max_retries,
                     e
                 );
-                // Recover actual_start *and* seg_end from DB for partial progress.
-                // seg_end may have been shrunk by a coordinator split since we started.
-                let segs = db.load_segments(task_id).await?;
-                if let Some(seg) = segs.iter().find(|s| s.index == seg_idx) {
-                    seg_end = seg.end_byte;
-                    actual_start = seg_start + seg.downloaded_bytes;
-                    if actual_start > seg_end {
-                        // Segment completed during previous attempt.
-                        return Ok(seg.downloaded_bytes);
-                    }
-                }
                 let delay = RETRY_BASE_DELAY * 2u32.saturating_pow(attempts - 1);
                 tokio::select! {
                     _ = cancel.cancelled() => return Err(DownloadError::Cancelled),
@@ -5007,6 +5534,8 @@ async fn do_segment(
     event_tx: &mpsc::Sender<WorkerEvent>,
     total_downloaded: &AtomicI64,
     generation_evidence: &GenerationEvidence,
+    // 跨 worker 共享的重定向终点与请求建立延迟观测（见 request_path 模块）。
+    request_path: &RequestPath,
     // 当前规划总大小的共享视图（coordinator 就地扩容时更新，见 planned_total 注释）。
     planned_total: &AtomicI64,
     // `planned_total` 是否为【未经 probe 验证的估计值】（fresh hint 模式）。true 时
@@ -5050,26 +5579,64 @@ async fn do_segment(
     } else {
         RESPONSE_HEADER_TIMEOUT
     };
+    // 重定向终点复用：只用于 SYS 租约的 Range 请求。钉定节点 / 备选路径按自身路由
+    // 解析原始主机；hint 首连接 plain GET 是配额型端点的生命线，均保持原始 URL。
+    let reuse_redirect = sys_lease && !plain_first;
+    let mut direct = if reuse_redirect {
+        request_path.redirect_target()
+    } else {
+        None
+    };
     // hint 模式跳过了探测，反机器人质询只能在真实请求上首次暴露：换中性 UA 重发
     // 同一请求（`escape_bot_challenge` 保证每个请求最多重发一次，循环必然收敛）。
     let mut used = spec.current();
     let resp = loop {
-        let mut req = crate::downloader::build_request(client, url, reqwest::Method::GET, used);
+        let target = direct.as_deref().unwrap_or(url);
+        let mut req = crate::downloader::build_request(client, target, reqwest::Method::GET, used);
         if !plain_first {
             req = req.header("Range", &range);
         }
-        let resp = tokio::select! {
+        let sent_at = Instant::now();
+        let sent = tokio::select! {
             _ = cancel.cancelled() => return Err(DownloadError::Cancelled),
-            r = tokio::time::timeout(header_timeout, req.send()) => match r {
-                Ok(r) => r?,
-                Err(_) => {
-                    return Err(DownloadError::Other(format!(
-                        "segment {seg_idx} stalled: no response headers received within {}s",
-                        header_timeout.as_secs()
-                    )));
-                }
-            },
+            r = tokio::time::timeout(header_timeout, req.send()) => r,
         };
+        // 直连终点失败（传输错误、头超时或非 206）：终点可能已过期、一次性或按请求
+        // 分配（过期终点常回 200 全量 / HTML 错误页）。本任务内放弃复用并立即改发
+        // 原始 URL——不消耗段重试预算，也不把终点的 403 / 200 误当成服务器拒绝多连接
+        // 或 Range 失效。
+        if direct.is_some() {
+            let failure = match &sent {
+                Ok(Ok(r)) if r.status() == reqwest::StatusCode::PARTIAL_CONTENT => None,
+                Ok(Ok(r)) => Some(r.status().to_string()),
+                Ok(Err(e)) => Some(e.to_string()),
+                Err(_) => Some(format!(
+                    "no response headers within {}s",
+                    header_timeout.as_secs()
+                )),
+            };
+            if let Some(failure) = failure {
+                log_info!(
+                    "[coordinator] task {} seg {} 重定向终点直连失败（{}），本任务改回原始 URL",
+                    task_id,
+                    seg_idx,
+                    failure
+                );
+                request_path.abandon_redirect();
+                direct = None;
+                continue;
+            }
+        }
+        let resp = match sent {
+            Ok(r) => r?,
+            Err(_) => {
+                return Err(DownloadError::Other(format!(
+                    "segment {seg_idx} stalled: no response headers received within {}s",
+                    header_timeout.as_secs()
+                )));
+            }
+        };
+        request_path.record_setup(sent_at.elapsed());
         match spec.escape_bot_challenge(used, &resp, db, task_id).await {
             Some(neutral) => {
                 drop(resp);
@@ -5079,6 +5646,13 @@ async fn do_segment(
         }
     };
     let resp = resp.error_for_status()?;
+    if reuse_redirect
+        && direct.is_none()
+        && resp.status() == reqwest::StatusCode::PARTIAL_CONTENT
+        && request_path::reuse_is_safe(url, resp.url(), used)
+    {
+        request_path.learn_redirect(url, resp.url().as_str());
+    }
 
     // --- Range 能力裁决（hint 模式，每任务恰好一次）------------------------
     // 依据首个成功响应：206（服务器履行了 Range）或 200 携带
@@ -5246,6 +5820,7 @@ async fn do_segment(
         .get(reqwest::header::LAST_MODIFIED)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
+    generation_evidence.note_response_validators(resp_etag_str, resp_lm_str);
     let etag_mismatch =
         !expected_etag.is_empty() && !resp_etag_str.is_empty() && resp_etag_str != expected_etag;
     let last_modified_mismatch = !expected_last_modified.is_empty()
@@ -5270,6 +5845,7 @@ async fn do_segment(
                  lm=\"{resp_lm_str}\". The file may have changed on the server during download."
             )));
         }
+        generation_evidence.note_lm_drift_tolerated();
         log_warn!(
             "[coordinator] task {} seg {} Last-Modified 跨 CDN edge 不同（probe=\"{}\" 本段=\"{}\"）\
              但 Content-Range 总大小（{:?}，已知 {}）与请求起点（{:?}，请求 {}）均一致，\
@@ -5321,6 +5897,7 @@ async fn do_segment(
                 Some(actual_start),
             );
             if !fatal {
+                generation_evidence.note_lm_drift_tolerated();
                 log_warn!(
                     "[coordinator] task {} seg {} 跨段 Last-Modified 不同（基线=\"{}\" 本段=\"{}\"）\
                      但 Content-Range 总大小与起点一致，判定为 CDN edge 时钟/格式差异，继续",
@@ -5498,6 +6075,8 @@ async fn do_segment(
     let mut file = tokio::io::BufWriter::with_capacity(buf_cap, file);
     file.seek(std::io::SeekFrom::Start(actual_start as u64))
         .await?;
+    // 后台 fdatasync 用的同文件独立句柄，首个落库周期才创建（短段不付这个 fd）。
+    let mut sync_handle: Option<Arc<std::fs::File>> = None;
 
     let mut seg_downloaded = actual_start - seg_start;
     let mut last_db_save = Instant::now();
@@ -5588,8 +6167,8 @@ async fn do_segment(
                         // --- Boundary check BEFORE writing ---
                         // Read the possibly-shrunk end_byte from shared state.
                         if let Ok(states) = seg_states.lock()
-                            && let Some(s) = states.iter().find(|s| s.index == seg_idx) {
-                                effective_end = s.end_byte;
+                            && let Some(pos) = seg_state_pos(&states, seg_idx) {
+                                effective_end = states[pos].end_byte;
                             }
 
                         // Calculate the write budget.
@@ -5659,30 +6238,41 @@ async fn do_segment(
                         // 检查（BUG-COORD-FSYNC）。
                         //
                         // 但 fdatasync 刷的是【整个文件 inode】的脏页，与 fd 无关——64 段
-                        // 各自每 3s fsync 是重复整盘刷写。改用 FileSyncGate 合并为全局每
-                        // MIN_SYNC_GAP 至多一次 fdatasync，并仅把【已被某次 fsync 覆盖】的
-                        // 偏移 durable_offset 写入 DB，严格保持上述不变式；未被覆盖的最新
-                        // 快照暂存 pending_snap，待后续 fsync 覆盖后提交（滞后约一个周期）。
+                        // 各自每 3s fsync 是重复整盘刷写。FileSyncGate 把它合并为全局每
+                        // MIN_SYNC_GAP 至多一次、并放到阻塞线程池里做（本 worker 不等它，
+                        // 继续读 socket），仅把【已被某次已完成 fsync 覆盖】的快照提交为
+                        // durable_offset；未覆盖的最早快照留在 pending_snap，下个周期再判
+                        // （保留最早而非最新：慢盘上 fsync 超过一个周期时水位仍必然推进）。
                         if last_db_save.elapsed().as_secs() >= DB_SAVE_INTERVAL_SECS {
+                            if let Some(error) = sync_gate.failure() {
+                                return Err(error.into());
+                            }
                             file.flush().await?;
                             let snap = seg_downloaded;
                             let snap_t = Instant::now();
-                            let synced_start = sync_gate.sync_if_stale(file.get_ref()).await?;
                             let prev_durable = durable_offset;
-                            if synced_start >= snap_t {
-                                // fsync 起始于本快照之后 → snap 全部已持久化。
-                                durable_offset = snap;
-                                pending_snap = None;
-                            } else {
-                                // 命中一次较早的合并 fsync：snap 尚未被覆盖。先提交上一轮
-                                // 挂起快照（若已被本次 fsync 覆盖），再把本次 snap 记为挂起。
-                                if let Some((off, t)) = pending_snap
-                                    && synced_start >= t
-                                {
+                            let covered = |t: Instant| {
+                                sync_gate.last_completed_start().is_some_and(|s| s >= t)
+                            };
+                            match pending_snap {
+                                Some((off, t)) if covered(t) => {
                                     durable_offset = off;
+                                    pending_snap = Some((snap, snap_t));
                                 }
-                                pending_snap = Some((snap, snap_t));
+                                Some(_) => {}
+                                None => pending_snap = Some((snap, snap_t)),
                             }
+                            let handle = match &sync_handle {
+                                Some(handle) => Arc::clone(handle),
+                                None => {
+                                    let handle = Arc::new(
+                                        file.get_ref().try_clone().await?.into_std().await,
+                                    );
+                                    sync_handle = Some(Arc::clone(&handle));
+                                    handle
+                                }
+                            };
+                            sync_gate.kick_background(&handle);
                             // 仅在 durable 水位推进时写入汇聚表；coordinator 批量落库。
                             if durable_offset != prev_durable {
                                 durable_progress
@@ -5737,9 +6327,9 @@ async fn do_segment(
     // 收窄到我们停下的位置，本段实际已完成，不应误报截断。
     if !boundary_reached && !cancel.is_cancelled() {
         if let Ok(states) = seg_states.lock()
-            && let Some(s) = states.iter().find(|s| s.index == seg_idx)
+            && let Some(pos) = seg_state_pos(&states, seg_idx)
         {
-            effective_end = s.end_byte;
+            effective_end = states[pos].end_byte;
         }
         let next_pos = seg_start + seg_downloaded;
         if next_pos <= effective_end {
@@ -5842,9 +6432,9 @@ fn update_seg_state(
     downloaded_bytes: i64,
 ) {
     if let Ok(mut states) = seg_states.lock()
-        && let Some(s) = states.iter_mut().find(|s| s.index == seg_idx)
+        && let Some(pos) = seg_state_pos(&states, seg_idx)
     {
-        s.downloaded_bytes = downloaded_bytes;
+        states[pos].downloaded_bytes = downloaded_bytes;
         // Intentionally do NOT touch `end_byte` — it is owned by the
         // coordinator (see `rebuild_seg_states`).
     }
@@ -5860,13 +6450,13 @@ mod tests {
     use super::{
         FileSyncGate, FreezeState, HINT_UNCAP_MAX, LiveSegment, MAX_SEGMENTS, MIN_SPLIT_BYTES,
         MIN_SYNC_GAP, RAMP_SOFT_PROBE_COOLDOWN_TICKS, RAMP_SOFT_PROBE_MAX_ATTEMPTS,
-        RAMP_SOFT_PROBE_TASK_BUDGET, RampVerdict, SegState, TAIL_MIN_SPLIT_BYTES, all_done,
-        beneficial_hint_scale, build_seg_state_vec, check_cross_segment_validators, conn_cap_cache,
-        domain_conn_hint, dynamic_min_split_bytes, extract_host, find_next_pending_only,
-        find_next_work, freeze_verdict_next_state, has_other_in_flight, hint_uncap_ceiling,
-        initial_allowed_workers, is_single_conn_domain, is_tail, ramp_verdict, rebuild_seg_states,
-        record_domain_conn_cap, record_domain_conn_hint, should_expand, should_shrink,
-        soft_probe_eval_transition, soft_probe_ready, sustained_shrink_next_state,
+        RAMP_SOFT_PROBE_TASK_BUDGET, RampVerdict, SegState, SplitCost, TAIL_MIN_SPLIT_BYTES,
+        all_done, beneficial_hint_scale, build_seg_state_vec, check_cross_segment_validators,
+        conn_cap_cache, domain_conn_hint, dynamic_min_split_bytes, extract_host,
+        find_next_pending_only, find_next_work, freeze_verdict_next_state, has_other_in_flight,
+        hint_uncap_ceiling, initial_allowed_workers, is_single_conn_domain, is_tail, ramp_verdict,
+        rebuild_seg_states, record_domain_conn_cap, record_domain_conn_hint, should_expand,
+        should_shrink, soft_probe_eval_transition, soft_probe_ready, sustained_shrink_next_state,
         try_proactive_split, try_split_largest, validate_coverage,
     };
     use crate::downloader::{
@@ -5874,6 +6464,7 @@ mod tests {
     };
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex as StdMutex};
+    use std::time::{Duration, Instant};
 
     #[tokio::test]
     async fn preallocate_file_len_preserves_data_and_never_shrinks_existing_file() {
@@ -6346,6 +6937,25 @@ mod tests {
         ));
     }
 
+    /// 收缩验证：收缩后吞吐回升（连接数惩罚解除）保留收缩；观察满窗口仍未回升
+    /// （链路噪声）撤销；窗口不足继续观察。
+    #[test]
+    fn shrink_eval_keeps_only_shrinks_that_recover_throughput() {
+        use super::{RAMP_SHRINK_EVAL_WINDOWS, ShrinkEval, shrink_eval_verdict};
+        assert_eq!(
+            shrink_eval_verdict(5_000_000.0, 9_000_000.0, 1),
+            ShrinkEval::Confirmed
+        );
+        assert_eq!(
+            shrink_eval_verdict(5_000_000.0, 3_000_000.0, 1),
+            ShrinkEval::Pending
+        );
+        assert_eq!(
+            shrink_eval_verdict(5_000_000.0, 5_100_000.0, RAMP_SHRINK_EVAL_WINDOWS),
+            ShrinkEval::Revert
+        );
+    }
+
     /// 正常可扩：未冻结、无连接敏感、额度用满、未达上限、本窗口未收缩。
     #[test]
     fn should_expand_true_when_healthy() {
@@ -6624,7 +7234,12 @@ mod tests {
         );
 
         let mut next_idx = 2;
-        let result = try_split_largest(&mut segs, &mut next_idx, MIN_SPLIT_BYTES);
+        let result = try_split_largest(
+            &mut segs,
+            &mut next_idx,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(result.is_some(), "should split the largest segment");
 
         let next = result.expect("already checked");
@@ -6661,7 +7276,12 @@ mod tests {
         segs.insert(0, make_seg(0, 0, 3_000_000, 1_000_001, SegState::Active));
 
         let mut next_idx = 1;
-        let result = try_split_largest(&mut segs, &mut next_idx, MIN_SPLIT_BYTES);
+        let result = try_split_largest(
+            &mut segs,
+            &mut next_idx,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(result.is_none(), "should not split small segments");
     }
 
@@ -6681,7 +7301,12 @@ mod tests {
             );
         }
         let mut next_idx = MAX_SEGMENTS;
-        let result = try_split_largest(&mut segs, &mut next_idx, MIN_SPLIT_BYTES);
+        let result = try_split_largest(
+            &mut segs,
+            &mut next_idx,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(result.is_none(), "should not exceed MAX_SEGMENTS");
     }
 
@@ -6705,7 +7330,12 @@ mod tests {
 
         // With old code: segments.len() == MAX_SEGMENTS → None (workers retired).
         // With fix: active_or_pending == 1 < MAX_SEGMENTS → should split successfully.
-        let result = try_split_largest(&mut segs, &mut next_idx, MIN_SPLIT_BYTES);
+        let result = try_split_largest(
+            &mut segs,
+            &mut next_idx,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(
             result.is_some(),
             "completed segments must not prevent splits of the remaining active segment"
@@ -6749,7 +7379,12 @@ mod tests {
         let mut next_idx = MAX_SEGMENTS;
 
         // active_or_pending == MAX_SEGMENTS → must still return None.
-        let result = try_split_largest(&mut segs, &mut next_idx, MIN_SPLIT_BYTES);
+        let result = try_split_largest(
+            &mut segs,
+            &mut next_idx,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(
             result.is_none(),
             "must not exceed MAX_SEGMENTS active connections"
@@ -6766,7 +7401,12 @@ mod tests {
 
         // Perform multiple consecutive splits.
         for _ in 0..5 {
-            let result = try_split_largest(&mut segs, &mut next_idx, MIN_SPLIT_BYTES);
+            let result = try_split_largest(
+                &mut segs,
+                &mut next_idx,
+                MIN_SPLIT_BYTES,
+                SplitCost::default(),
+            );
             assert!(result.is_some(), "should be able to split");
             assert!(
                 validate_coverage(&segs, total_bytes).is_ok(),
@@ -6790,7 +7430,12 @@ mod tests {
         );
 
         let mut next_idx = 1;
-        let result = try_split_largest(&mut segs, &mut next_idx, MIN_SPLIT_BYTES);
+        let result = try_split_largest(
+            &mut segs,
+            &mut next_idx,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(result.is_some());
 
         let next = result.expect("checked");
@@ -6815,7 +7460,7 @@ mod tests {
         segs.insert(1, make_seg(1, 10_000_000, 19_999_999, 0, SegState::Active));
         let mut next = 2;
 
-        let result = try_split_largest(&mut segs, &mut next, MIN_SPLIT_BYTES);
+        let result = try_split_largest(&mut segs, &mut next, MIN_SPLIT_BYTES, SplitCost::default());
         assert!(result.is_some());
 
         let next = result.expect("checked");
@@ -6837,7 +7482,13 @@ mod tests {
         );
 
         let mut next_idx = 2;
-        let result = find_next_work(&mut segs, &mut next_idx, 100_000_001, MIN_SPLIT_BYTES);
+        let result = find_next_work(
+            &mut segs,
+            &mut next_idx,
+            100_000_001,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(result.is_some());
         let next = result.expect("checked");
         assert_eq!(
@@ -6856,7 +7507,13 @@ mod tests {
         segs.insert(0, make_seg(0, 0, 9_999_999, 0, SegState::Active));
         let mut next_idx = 1;
 
-        let result = find_next_work(&mut segs, &mut next_idx, 10_000_000, MIN_SPLIT_BYTES);
+        let result = find_next_work(
+            &mut segs,
+            &mut next_idx,
+            10_000_000,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(result.is_some());
         let next = result.expect("checked");
         assert!(next.split_parent.is_some(), "should come from a split");
@@ -6869,7 +7526,13 @@ mod tests {
         segs.insert(0, make_seg(0, 0, 99, 100, SegState::Completed));
 
         let mut next_idx = 1;
-        let result = find_next_work(&mut segs, &mut next_idx, 100, MIN_SPLIT_BYTES);
+        let result = find_next_work(
+            &mut segs,
+            &mut next_idx,
+            100,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(result.is_none(), "no work when all completed");
     }
 
@@ -6898,11 +7561,22 @@ mod tests {
         let mut next_idx = 1;
 
         // Normal split should fail:
-        let normal = try_split_largest(&mut segs, &mut next_idx, MIN_SPLIT_BYTES);
+        let normal = try_split_largest(
+            &mut segs,
+            &mut next_idx,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(normal.is_none(), "normal split should fail for 500 KB");
 
         // But find_next_work should succeed via tail micro-split (Strategy 3):
-        let result = find_next_work(&mut segs, &mut next_idx, remaining, MIN_SPLIT_BYTES);
+        let result = find_next_work(
+            &mut segs,
+            &mut next_idx,
+            remaining,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(
             result.is_some(),
             "tail micro-split should succeed for 500 KB"
@@ -6928,7 +7602,13 @@ mod tests {
         segs.insert(0, make_seg(0, 0, remaining - 1, 0, SegState::Active));
 
         let mut next_idx = 1;
-        let result = find_next_work(&mut segs, &mut next_idx, remaining, MIN_SPLIT_BYTES);
+        let result = find_next_work(
+            &mut segs,
+            &mut next_idx,
+            remaining,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(
             result.is_none(),
             "should not split segment smaller than TAIL_MIN_SPLIT_BYTES"
@@ -6946,7 +7626,13 @@ mod tests {
 
         let mut next_idx = 1;
         // When min_split == TAIL_MIN_SPLIT_BYTES, Strategy 3 should not retry.
-        let result = find_next_work(&mut segs, &mut next_idx, remaining, TAIL_MIN_SPLIT_BYTES);
+        let result = find_next_work(
+            &mut segs,
+            &mut next_idx,
+            remaining,
+            TAIL_MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         // 100KB >= 64KB so try_split_largest(TAIL) succeeds, but we're testing
         // that when called with TAIL_MIN_SPLIT_BYTES directly, Strategy 2
         // handles it (not Strategy 3 infinite loop).
@@ -6954,6 +7640,45 @@ mod tests {
         assert!(
             result.is_some(),
             "Strategy 2 itself should handle TAIL_MIN_SPLIT_BYTES"
+        );
+    }
+
+    /// 逐段速率尚无样本时按单连接估计判断：持有者 0.25s 能下完的 128KB 尾巴，
+    /// 帮手要 1.2s 才能收到首字节——不拆（否则多一个请求、空占一条连接）；
+    /// 无延迟样本时仍按历史行为拆分。
+    #[test]
+    fn tail_split_waits_for_holder_when_helper_setup_dominates() {
+        let remaining = 128 * 1024;
+        let slow_setup = SplitCost {
+            setup_secs: 1.2,
+            conn_bps: Some(512.0 * 1024.0),
+        };
+        let mut segs = BTreeMap::new();
+        segs.insert(0, make_seg(0, 0, remaining - 1, 0, SegState::Active));
+        let mut next_idx = 1;
+        assert!(
+            find_next_work(
+                &mut segs,
+                &mut next_idx,
+                remaining,
+                MIN_SPLIT_BYTES,
+                slow_setup
+            )
+            .is_none()
+        );
+
+        let mut segs = BTreeMap::new();
+        segs.insert(0, make_seg(0, 0, remaining - 1, 0, SegState::Active));
+        let mut next_idx = 1;
+        assert!(
+            find_next_work(
+                &mut segs,
+                &mut next_idx,
+                remaining,
+                MIN_SPLIT_BYTES,
+                SplitCost::default()
+            )
+            .is_some()
         );
     }
 
@@ -6986,7 +7711,13 @@ mod tests {
         assert!(validate_coverage(&segs, total).is_ok(), "precondition");
 
         let mut next_idx = 2;
-        let result = find_next_work(&mut segs, &mut next_idx, total, MIN_SPLIT_BYTES);
+        let result = find_next_work(
+            &mut segs,
+            &mut next_idx,
+            total,
+            MIN_SPLIT_BYTES,
+            SplitCost::default(),
+        );
         assert!(result.is_some(), "tail micro-split should work");
         assert!(
             validate_coverage(&segs, total).is_ok(),
@@ -7008,7 +7739,13 @@ mod tests {
 
         let mut next_idx = 2;
         assert!(
-            try_proactive_split(&mut segs, &mut next_idx, MIN_SPLIT_BYTES).is_none(),
+            try_proactive_split(
+                &mut segs,
+                &mut next_idx,
+                MIN_SPLIT_BYTES,
+                SplitCost::default()
+            )
+            .is_none(),
             "should not proactively split when Pending segments exist"
         );
     }
@@ -7019,7 +7756,8 @@ mod tests {
         segs.insert(0, make_seg(0, 0, 19_999_999, 0, SegState::Active));
         let mut next = 1;
 
-        let result = try_proactive_split(&mut segs, &mut next, MIN_SPLIT_BYTES);
+        let result =
+            try_proactive_split(&mut segs, &mut next, MIN_SPLIT_BYTES, SplitCost::default());
         assert!(result.is_some(), "proactive split should succeed");
 
         // New segment should be Pending.
@@ -7433,6 +8171,38 @@ mod tests {
     }
 
     #[test]
+    fn content_audit_only_when_version_evidence_is_suspiciously_missing() {
+        use super::GenerationEvidence;
+
+        // 无基线、响应也无 validator（hint 无 validator）：无嫌疑依据，不审计。
+        assert!(!GenerationEvidence::default().content_audit_warranted("", ""));
+
+        // 探测基线带 ETag，分段 206 全部剥离：审计。
+        assert!(GenerationEvidence::default().content_audit_warranted("\"e1\"", ""));
+
+        // 探测基线带 ETag 且有响应回显 ETag：已逐段强比对，不审计。
+        let echoed = GenerationEvidence::default();
+        echoed.note_response_validators("\"e1\"", "");
+        assert!(!echoed.content_audit_warranted("\"e1\"", ""));
+
+        // 基线仅有 Last-Modified：被剥离才审计，回显则不审计。
+        assert!(GenerationEvidence::default().content_audit_warranted("", "lm"));
+        let lm_echoed = GenerationEvidence::default();
+        lm_echoed.note_response_validators("", "lm");
+        assert!(!lm_echoed.content_audit_warranted("", "lm"));
+
+        // 被容忍的 Last-Modified 漂移（无 ETag 佐证）：审计；有 ETag 佐证则不审计。
+        let drift = GenerationEvidence::default();
+        drift.note_response_validators("", "lm");
+        drift.note_lm_drift_tolerated();
+        assert!(drift.content_audit_warranted("", ""));
+        let drift_with_etag = GenerationEvidence::default();
+        drift_with_etag.note_response_validators("\"e1\"", "lm");
+        drift_with_etag.note_lm_drift_tolerated();
+        assert!(!drift_with_etag.content_audit_warranted("\"e1\"", "lm"));
+    }
+
+    #[test]
     fn count_domain_conn_policies_skips_stale_and_foreign_versions() {
         use super::{count_domain_conn_policies, now_unix_secs};
         let now = now_unix_secs();
@@ -7811,109 +8581,102 @@ mod tests {
         (path, file)
     }
 
-    // 合并闸的核心契约：MIN_SYNC_GAP 窗口内的重复调用必须复用同一次【已完成】
-    // fsync 的起始时刻，绝不重复触发整盘 fdatasync。若合并逻辑失效（例如
-    // `syncing`/`last_completed_start` 判据被改坏、或误把窗口判定为“已过期”），
-    // 本测试会观察到两次不同的 Instant 而失败——这正是 BUG-COORD-FSYNC 想避免的
-    // “N 段各自整盘刷写”退化路径。
+    fn std_handle(path: &std::path::Path) -> Arc<std::fs::File> {
+        Arc::new(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .expect("open std handle for FileSyncGate test"),
+        )
+    }
+
+    /// 等待一次与 `prev` 不同的后台 fsync 完成，返回其起始时刻（5s 超时即失败）。
+    async fn wait_background_sync(gate: &FileSyncGate, prev: Option<Instant>) -> Instant {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(start) = gate.last_completed_start()
+                && Some(start) != prev
+            {
+                return start;
+            }
+            assert!(Instant::now() < deadline, "后台 fsync 未在 5s 内完成");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    // 合并闸的核心契约：MIN_SYNC_GAP 窗口内的重复 kick 必须是 no-op，绝不重复触发
+    // 整盘 fdatasync——这正是 BUG-COORD-FSYNC 想避免的「N 段各自整盘刷写」退化。
     #[tokio::test]
-    async fn coalesce_within_gap_reuses_same_sync() {
+    async fn kick_within_gap_is_noop() {
         let (path, file) = open_sync_gate_test_file().await;
+        let handle = std_handle(&path);
         let gate = FileSyncGate::new();
 
-        let s1 = gate
-            .sync_if_stale(&file)
-            .await
-            .expect("first sync_if_stale should succeed");
-        let s2 = gate
-            .sync_if_stale(&file)
-            .await
-            .expect("second sync_if_stale should succeed");
-
+        gate.kick_background(&handle);
+        let s1 = wait_background_sync(&gate, None).await;
+        gate.kick_background(&handle);
+        tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(
-            s1, s2,
-            "MIN_SYNC_GAP 内的第二次调用必须复用第一次已完成 fsync 的起始时刻；\
-             若返回了不同的 Instant，说明合并逻辑失效，退化成了每次都重新 fdatasync"
+            gate.last_completed_start(),
+            Some(s1),
+            "MIN_SYNC_GAP 内的第二次 kick 不得发起新的 fdatasync"
         );
 
-        drop(file);
+        drop((file, handle));
         std::fs::remove_file(&path).expect("test cleanup succeeds");
     }
 
-    // gap 之外必须真正触发新一轮 fsync：验证“新鲜度”判据没有被写反（例如
-    // `elapsed() < MIN_SYNC_GAP` 误写成恒真或恒假）。防两类回归：数据长期得不到
-    // 刷新（S 永不前进），或合并彻底失效。用真实 sleep 而非 tokio 暂停时钟，
-    // 因为 sync_data() 经 spawn_blocking 落到真实阻塞 IO 线程池，与虚拟时钟
-    // 交互不可靠。
+    // gap 之外必须真正触发新一轮 fsync：防「数据长期得不到刷新」回归。用真实
+    // sleep：sync_data 落在真实阻塞线程池，与虚拟时钟交互不可靠。
     #[tokio::test]
-    async fn fresh_sync_after_gap_advances() {
+    async fn kick_after_gap_syncs_again() {
         let (path, file) = open_sync_gate_test_file().await;
+        let handle = std_handle(&path);
         let gate = FileSyncGate::new();
 
-        let s1 = gate
-            .sync_if_stale(&file)
-            .await
-            .expect("first sync_if_stale should succeed");
-
-        // 略大于 MIN_SYNC_GAP，确保确定性地跨过闸门的新鲜度窗口。
-        tokio::time::sleep(MIN_SYNC_GAP + std::time::Duration::from_millis(100)).await;
-
-        let s2 = gate
-            .sync_if_stale(&file)
-            .await
-            .expect("second sync_if_stale after gap should succeed");
-
+        gate.kick_background(&handle);
+        let s1 = wait_background_sync(&gate, None).await;
+        tokio::time::sleep(MIN_SYNC_GAP + Duration::from_millis(100)).await;
+        gate.kick_background(&handle);
+        let s2 = wait_background_sync(&gate, Some(s1)).await;
         assert!(
             s2 > s1,
-            "超过 MIN_SYNC_GAP 后必须触发一次新的 fdatasync，其起始时刻应严格晚于上一次；\
-             s2 <= s1 意味着 gap 判据失效（要么从不刷新，要么被误判为仍然新鲜）"
+            "超过 MIN_SYNC_GAP 后必须发起一次起始更晚的新 fdatasync"
         );
 
-        drop(file);
+        drop((file, handle));
         std::fs::remove_file(&path).expect("test cleanup succeeds");
     }
 
-    // 并发突发场景：多个 worker 同时对同一 gate 发起 sync_if_stale，必须全部
-    // 无 panic/无死锁地成功返回，且被合并为极少数几次真实 fsync（理想 1 次）。
-    // 用共享的同一个 `Arc<tokio::fs::File>` 句柄模拟多段 worker 共享同一文件
-    // fd 的真实场景。防两类回归：
-    // 1) notify 的 TOCTOU（通知先于等待者注册而丢失）导致等待者永久阻塞、
-    //    整个测试挂死；
-    // 2) 合并逻辑失效，导致 N 个并发调用各自触发一次整盘 fsync（起始时刻
-    //    彼此不同，distinct 数会显著大于 1~2）。
+    // 并发突发：16 个 worker 同时 kick 只跑一次 fsync；随后的覆盖式等待复用这次
+    // 起始晚于其快照的后台 fsync，不再自刷、也不死锁（notify TOCTOU 回归）。
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn concurrent_callers_coalesce_and_complete() {
+    async fn concurrent_kicks_coalesce_and_cover_waiters() {
         let (path, file) = open_sync_gate_test_file().await;
+        let handle = std_handle(&path);
         let gate = FileSyncGate::new();
-        let file = Arc::new(file);
+        let snap_t = Instant::now();
 
-        const N: usize = 16;
-        let mut handles = Vec::with_capacity(N);
-        for _ in 0..N {
+        let mut kicks = Vec::new();
+        for _ in 0..16 {
             let gate = gate.clone();
-            let file = Arc::clone(&file);
-            handles.push(tokio::spawn(async move { gate.sync_if_stale(&file).await }));
+            let handle = Arc::clone(&handle);
+            kicks.push(tokio::spawn(async move { gate.kick_background(&handle) }));
         }
-
-        let mut starts = Vec::with_capacity(N);
-        for h in handles {
-            // join 失败（子任务 panic 或被取消）本身就是需要暴露的回归，
-            // 不能被吞掉，否则死锁会被误判为“测试通过”。
-            let joined = h
-                .await
-                .expect("sync_if_stale task must not panic or be cancelled");
-            starts.push(joined.expect("sync_if_stale must not return an I/O error"));
+        for kick in kicks {
+            kick.await.expect("kick task must not panic");
         }
-
-        let distinct: std::collections::BTreeSet<std::time::Instant> = starts.into_iter().collect();
-        assert!(
-            distinct.len() <= 2,
-            "{N} 个并发调用应被合并为至多 2 次真实 fsync（理想 1 次），\
-             实际观察到 {} 种不同起始时刻，说明合并逻辑失效或退化为逐一 fsync",
-            distinct.len()
+        let background = wait_background_sync(&gate, None).await;
+        let covering = gate
+            .sync_covering(&file, snap_t)
+            .await
+            .expect("sync_covering");
+        assert_eq!(
+            covering, background,
+            "后台 fsync 起始晚于快照时，覆盖式等待必须直接复用它"
         );
 
-        drop(file);
+        drop((file, handle));
         std::fs::remove_file(&path).expect("test cleanup succeeds");
     }
 
@@ -8024,6 +8787,54 @@ mod tests {
         );
         // hint=4, base=16 → ×2=8 < base → 保持 16
         assert_eq!(hint_uncap_ceiling(true, None, Some(4), 16), 16);
+    }
+
+    #[test]
+    fn in_task_uncap_only_on_near_linear_gain_at_cap() {
+        use super::in_task_uncap_ceiling;
+        const MB: f64 = 1024.0 * 1024.0;
+        let plenty = 1 << 40;
+        // 8 → 16 连接吞吐 16 → 31 MB/s（单连接限速）：天花板 16 → 32。
+        assert_eq!(
+            in_task_uncap_ceiling(true, None, 16, 8, 16, 16.0 * MB, 31.0 * MB, plenty),
+            32.min(HINT_UNCAP_MAX)
+        );
+        // 带宽已饱和：翻倍连接只多 20% → 不解封。
+        assert_eq!(
+            in_task_uncap_ceiling(true, None, 16, 8, 16, 100.0 * MB, 120.0 * MB, plenty),
+            16
+        );
+        // 还没到天花板 / 用户显式上限 / 负面记录 / 剩余字节喂不饱：都不动。
+        assert_eq!(
+            in_task_uncap_ceiling(true, None, 16, 4, 8, 8.0 * MB, 16.0 * MB, plenty),
+            16
+        );
+        assert_eq!(
+            in_task_uncap_ceiling(false, None, 16, 8, 16, 16.0 * MB, 32.0 * MB, plenty),
+            16
+        );
+        assert_eq!(
+            in_task_uncap_ceiling(true, Some(16), 16, 8, 16, 16.0 * MB, 32.0 * MB, plenty),
+            16
+        );
+        assert_eq!(
+            in_task_uncap_ceiling(true, None, 16, 8, 16, 16.0 * MB, 32.0 * MB, 32 << 20),
+            16
+        );
+        // 已在平台上限：不再上抬。
+        assert_eq!(
+            in_task_uncap_ceiling(
+                true,
+                None,
+                HINT_UNCAP_MAX,
+                HINT_UNCAP_MAX / 2,
+                HINT_UNCAP_MAX,
+                16.0 * MB,
+                32.0 * MB,
+                plenty
+            ),
+            HINT_UNCAP_MAX
+        );
     }
 
     // -----------------------------------------------------------------------

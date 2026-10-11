@@ -430,6 +430,21 @@ pub struct DownloadParams {
     /// 画质选择跳过 `HostSelection` 弹窗，直接取最高码率（与超时默认值
     /// 一致）。仅 HLS/DASH 路径读取；BT 文件选择在创建时已落库，不经此。
     pub unattended: bool,
+    /// 启动序幕已为本次 fresh 启动跑过的完整探测结果（见 [`PreprobedInfo`]）。
+    /// `Some(Ok)` 时 `run_download_inner` 直接采用而不再探测；`Some(Err)` 是序幕
+    /// 探测（已含完整重试 / 自适应阶梯）的最终失败，下载器直接上报而不再重跑一遍
+    /// 同样的阶梯（否则永久性失败要等两倍时间）；`None`（hint / 续传 / 序幕未探测
+    /// 或被取消 / 非 HTTP 协议）时下载器自己探测。
+    pub preprobed: Option<Result<PreprobedInfo, DownloadError>>,
+}
+
+/// 启动序幕（`download_manager::finalize_start_file_name`）用与下载相同的 client / spec
+/// 跑完 [`resolve_file_info_with_ua_fallback`] 后交给下载器的结果：序幕据此命名，
+/// 下载器据此跳过自己的第二轮探测。仅在序幕与 `run_download` 之间即时传递，不跨暂停 / 续传保留。
+pub struct PreprobedInfo {
+    pub info: FileInfo,
+    /// 探测靠请求头自适应才通过时的适配后 spec；序幕已落库，下载器只需沿用。
+    pub adapted: Option<RequestSpec>,
 }
 
 /// 将浏览器扩展捕获的额外 HTTP 头应用到请求构建器上。
@@ -1287,6 +1302,45 @@ pub(crate) fn build_client_builder(
 /// transient failures without making users wait excessively.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// 范围探测已给出决定性答复（206 + `Content-Range`）后，并发的 HEAD 最多再等
+/// 这么久。206 自带大小、validator、`Content-Type` 与通常的 `Content-Disposition`，
+/// HEAD 只是锦上添花；部分服务器 / 代理链路对 HEAD 不回包（实测 Hetzner 经
+/// TUN 代理 HEAD 挂满 15s 超时，而 `Range: bytes=0-0` 1s 返回），不设上限会把
+/// 整个探测拖到 [`PROBE_TIMEOUT`]。
+const PROBE_HEAD_GRACE: Duration = Duration::from_secs(1);
+
+/// 并发等待 HEAD 与 Range GET 两路探测。GET 先给出决定性答复（`get_conclusive`
+/// 为真）时，HEAD 只再等 `head_grace`，超时即放弃（返回 `None`）；否则两路都
+/// 等到各自完成（HEAD 是 GET 失败时的唯一元数据来源）。
+async fn await_probe_pair<H, G>(
+    head: H,
+    get: G,
+    get_conclusive: impl FnOnce(&G::Output) -> bool,
+    head_grace: Duration,
+) -> (Option<H::Output>, G::Output)
+where
+    H: Future,
+    G: Future,
+{
+    let mut head = std::pin::pin!(head);
+    let mut get = std::pin::pin!(get);
+    let mut head_out = None;
+    let get_out = loop {
+        tokio::select! {
+            h = &mut head, if head_out.is_none() => head_out = Some(h),
+            g = &mut get => break g,
+        }
+    };
+    if head_out.is_none() {
+        head_out = if get_conclusive(&get_out) {
+            tokio::time::timeout(head_grace, head).await.ok()
+        } else {
+            Some(head.await)
+        };
+    }
+    (head_out, get_out)
+}
+
 /// Maximum retries for the probe phase (HEAD + GET).
 ///
 /// A bot challenge (`cf-mitigated: challenge`, any status — Cloudflare rejects a
@@ -1550,7 +1604,7 @@ fn spec_with_browser_ua_and_referrer(spec: &RequestSpec, url: &str) -> RequestSp
 }
 
 /// 把请求头自适应结果写回任务的持久化请求头，使后续分段 worker 与续传（尤其免探测的 hint 续传）沿用。
-async fn persist_adapted_spec(db: &Db, task_id: &str, adapted: &RequestSpec) {
+pub(crate) async fn persist_adapted_spec(db: &Db, task_id: &str, adapted: &RequestSpec) {
     let Ok(Some((cookies, current_referrer, headers_json))) =
         db.load_task_request_context(task_id).await
     else {
@@ -1649,7 +1703,8 @@ pub(crate) async fn resolve_file_info_with_ua_fallback(
             spec
         };
 
-        match resolve_file_info_once(client, url, attempt_spec).await {
+        let final_attempt = attempt + 1 == PROBE_MAX_RETRIES;
+        match resolve_file_info_once(client, url, attempt_spec, final_attempt).await {
             Ok(info) => return Ok((info, current_adapted)),
             Err(e) => {
                 log_info!(
@@ -1743,10 +1798,13 @@ pub(crate) fn download_error_chain_text(e: &DownloadError) -> String {
     format!("{e}{}", format_error_chain(StdError::source(e)))
 }
 
+/// `final_attempt`：本轮是否为重试循环的最后一轮——只在最后一轮才把「两路探测都
+/// 断在传输层」交给无 Range 的 plain GET 兜底（见下方 `(None, None)` 分支）。
 async fn resolve_file_info_once(
     client: &Client,
     url: &str,
     spec: &RequestSpec,
+    final_attempt: bool,
 ) -> Result<FileInfo, DownloadError> {
     // 非 GET（form POST 等）：HEAD 通常返回 405 Method Not Allowed，POST + Range
     // 在 HTTP 标准上未定义。改为只发一次原始 method+body 请求，从响应头读取
@@ -1781,17 +1839,39 @@ async fn resolve_file_info_once(
         .timeout(PROBE_TIMEOUT)
         .send();
 
-    let (head_result, get_result) = tokio::join!(head_fut, get_fut);
+    let (head_result, get_result) = await_probe_pair(
+        head_fut,
+        get_fut,
+        |get| {
+            get.as_ref().is_ok_and(|r| {
+                r.status() == reqwest::StatusCode::PARTIAL_CONTENT
+                    && r.headers().contains_key(reqwest::header::CONTENT_RANGE)
+            })
+        },
+        PROBE_HEAD_GRACE,
+    )
+    .await;
+    // 两路都没拿到任何 HTTP 响应（TLS 握手 EOF、连接重置、超时……）：这是链路
+    // 抖动，不是服务器拒绝 HEAD / Range 的证据。
+    let transport_only_failure = matches!(head_result, Some(Err(_))) && get_result.is_err();
 
     // Extract HEAD response (if successful)
     let mut head_status_desc = String::new();
     let head_data = match head_result {
-        Ok(r) if r.status().is_success() => {
+        None => {
+            log_info!(
+                "[resolve] HEAD still pending {}ms after a conclusive ranged GET; \
+                 proceeding with the GET metadata",
+                PROBE_HEAD_GRACE.as_millis()
+            );
+            None
+        }
+        Some(Ok(r)) if r.status().is_success() => {
             let u = r.url().clone();
             let h = r.headers().clone();
             Some((h, u))
         }
-        Ok(r) => {
+        Some(Ok(r)) => {
             head_status_desc = probe_status_desc(&r);
             log_info!(
                 "[resolve] HEAD failed: status={}, url={}, cookies_len={}",
@@ -1801,7 +1881,7 @@ async fn resolve_file_info_once(
             );
             None
         }
-        Err(e) => {
+        Some(Err(e)) => {
             head_status_desc = format!("network-error: {}", e);
             log_info!(
                 "[resolve] HEAD network error: {}{}, cookies_len={}",
@@ -1863,6 +1943,14 @@ async fn resolve_file_info_once(
         (Some((hh, hu)), _) => (hh.clone(), hu.clone()),
         (None, Some((gh, gu, _, _))) => (gh.clone(), gu.clone()),
         (None, None) => {
+            // 双探测仅因链路抖动失败：交回重试循环按退避重探。此时直接走 plain GET
+            // 兜底，只要兜底请求恰好连上，整个任务就会被判成「不支持 Range」单连接
+            // 下载（实测 python.org 经代理一次 TLS 握手 EOF 就让 89MB 单流跑完）。
+            if transport_only_failure && !final_attempt {
+                return Err(DownloadError::Other(format!(
+                    "probes failed: HEAD={head_status_desc}, ranged GET={get_status_desc}"
+                )));
+            }
             // 双探测（HEAD + Range GET）均失败。部分合法服务器（如飞牛 OS
             // multiple-download 端点）对下载 token 有并发/次数配额：HEAD 恒
             // 405，带 Range 的 GET 恒 400（配额已耗尽/不支持 Range），但一次
@@ -2080,12 +2168,10 @@ fn format_probe_failure(
 /// 但不带 Range 的普通 GET 能正常返回 200。旧逻辑在双探测失败时直接判死
 /// 任务，而这类服务器其实是可下载的——只是探测方式不对路。
 ///
-/// 这是 `resolve_file_info` 重试循环里【每一轮】最多发出的第 3 个请求
-/// （HEAD + ranged GET + 这次的 plain GET），不会叠加成
-/// `PROBE_MAX_RETRIES` × 3 次请求；每轮只在前两个探测都失败时才会触发。
-///
-/// 不区分"服务器可达但状态码错误"与"纯网络错误（连不上）"两种失败：后者
-/// 再发一次请求大概率也会失败，但无害，为简单起见不做区分。
+/// 至少一路探测拿到了 HTTP 响应时，每轮最多发出这第 3 个请求（HEAD + ranged
+/// GET + 这次的 plain GET）。两路都断在传输层（无任何响应）时只有最后一轮才
+/// 兜底：前几轮交回重试循环退避重探——plain GET 恰好连上会让整个任务被判成
+/// 「不支持 Range」单连接下载，链路抖动不能换来这种降级。
 async fn resolve_file_info_plain_get_fallback(
     client: &Client,
     url: &str,
@@ -2531,9 +2617,10 @@ const SINGLE_RESUME_ALIGNMENT_BYTES: i64 = 1024 * 1024;
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub async fn run_download(params: DownloadParams) {
+pub async fn run_download(mut params: DownloadParams) {
     let task_id_log = params.task_id.clone();
-    let result = match run_download_inner(&params).await {
+    let preprobed = params.preprobed.take();
+    let result = match run_download_inner(&params, preprobed).await {
         Ok(completed) => params
             .db
             .update_task_status(&params.task_id, 3, "")
@@ -2870,7 +2957,10 @@ async fn discard_segment_data(db: &Db, task_id: &str, path: &Path) -> Result<(),
 /// 返回 `(actual_total, finalize_renamed)`:`finalize_renamed` 仅当 finalize
 /// 阶段因目标名被占用而改名时为 `Some(新名)`,调用方须经完成信号上报
 /// (progress_reporter 对非空 file_name 锁存,空串 = 不变)。
-async fn run_download_inner(p: &DownloadParams) -> Result<(i64, Option<String>), DownloadError> {
+async fn run_download_inner(
+    p: &DownloadParams,
+    preprobed: Option<Result<PreprobedInfo, DownloadError>>,
+) -> Result<(i64, Option<String>), DownloadError> {
     log_info!(
         "[download] task {} starting, url={}",
         p.task_id,
@@ -2990,15 +3080,29 @@ async fn run_download_inner(p: &DownloadParams) -> Result<(i64, Option<String>),
             content_encoding_compressed: false,
         }
     } else {
-        log_info!("[download] task {} resolving file info...", p.task_id);
-        let (info, adapted) = resolve_file_info_with_ua_fallback(client, &p.url, &p.spec).await?;
-        if let Some(adapted_spec) = adapted {
-            // 探测靠请求头自适应（去 UA / 补浏览器 UA / 补防盗链 Referer）才通过：
-            // 真实下载（含分段 worker）必须用同一份请求头，否则探测通过、下载 403；
-            // 并落库让续传保持一致。
-            persist_adapted_spec(&p.db, &p.task_id, &adapted_spec).await;
-            applied_spec = Some(adapted_spec);
-        }
+        let info = if let Some(preprobed) = preprobed {
+            // 启动序幕已用同一 client / spec 跑过完整探测并落库自适应请求头，
+            // 这里不再发第二轮 HEAD ∥ Range 探测。
+            let PreprobedInfo { info, adapted } = preprobed?;
+            log_info!(
+                "[download] task {} reusing prelude probe result (probe skipped)",
+                p.task_id
+            );
+            applied_spec = adapted;
+            info
+        } else {
+            log_info!("[download] task {} resolving file info...", p.task_id);
+            let (info, adapted) =
+                resolve_file_info_with_ua_fallback(client, &p.url, &p.spec).await?;
+            if let Some(adapted_spec) = adapted {
+                // 探测靠请求头自适应（去 UA / 补浏览器 UA / 补防盗链 Referer）才通过：
+                // 真实下载（含分段 worker）必须用同一份请求头，否则探测通过、下载 403；
+                // 并落库让续传保持一致。
+                persist_adapted_spec(&p.db, &p.task_id, &adapted_spec).await;
+                applied_spec = Some(adapted_spec);
+            }
+            info
+        };
         log_info!(
             "[download] task {} resolved: name={}, size={}, range={}",
             p.task_id,
@@ -4334,20 +4438,40 @@ async fn download_single_once(
                 None,
                 None,
             ) {
-                return Err(DownloadError::VersionChanged(
-                    "validator mismatch on resumed Range response".to_string(),
-                ));
+                // 文件在暂停期间被替换：本地前缀是旧版本，不可拼接，也不能当作终态
+                // 错误退出——DB 里的旧 validator 会让之后每次续传都撞同一错误，任务
+                // 永远卡死。与 416 / 不可信 206 同一出路：丢弃续传偏移，不带 Range
+                // 重新请求完整文件；下方 `!actual_resume` 分支会截断旧前缀并把新响应
+                // 的 validator 回写 DB。
+                log_info!(
+                    "[download-single] task {} 续传响应 validator 与已存基线不符\
+                     （etag 基线=\"{}\" 本次=\"{}\"；Last-Modified 基线=\"{}\" 本次=\"{}\"），\
+                     文件已在服务器上变更；丢弃旧前缀（existing_len={}），从头重下新版本",
+                    task_id,
+                    expected_etag,
+                    resp_etag,
+                    expected_last_modified,
+                    resp_lm,
+                    existing_len
+                );
+                drop(resp);
+                let full_req = build_request(client, url, used.method.clone(), used);
+                resp = send_cancellable(full_req, cancel_token)
+                    .await?
+                    .error_for_status()?;
+                refetched_full = true;
+            } else {
+                log_warn!(
+                    "[download-single] task {} 续传响应 Last-Modified 不同（probe=\"{}\" 本次=\"{}\"）\
+                     但 Content-Range 总大小（{:?}）与已知总大小（{}）一致，判定为跨 CDN edge 的\
+                     时钟/格式差异，继续续传",
+                    task_id,
+                    expected_last_modified,
+                    resp_lm,
+                    content_range_total,
+                    total_bytes
+                );
             }
-            log_warn!(
-                "[download-single] task {} 续传响应 Last-Modified 不同（probe=\"{}\" 本次=\"{}\"）\
-                 但 Content-Range 总大小（{:?}）与已知总大小（{}）一致，判定为跨 CDN edge 的\
-                 时钟/格式差异，继续续传",
-                task_id,
-                expected_last_modified,
-                resp_lm,
-                content_range_total,
-                total_bytes
-            );
         }
     }
 
@@ -4798,10 +4922,65 @@ async fn download_multi_segment(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        PROBE_MAX_RETRIES, PROBE_RETRY_BASE_DELAY, PROBE_TIMEOUT, TEMP_EXT, dedup_filename,
-        format_probe_failure, parse_http_date,
+        PROBE_MAX_RETRIES, PROBE_RETRY_BASE_DELAY, PROBE_TIMEOUT, TEMP_EXT, await_probe_pair,
+        dedup_filename, format_probe_failure, parse_http_date,
     };
     use std::time::Duration;
+
+    // -----------------------------------------------------------------------
+    // await_probe_pair
+    // -----------------------------------------------------------------------
+
+    /// 决定性的 Range GET 不能被挂起的 HEAD 拖到探测超时：宽限期一过即放弃 HEAD。
+    #[tokio::test]
+    async fn conclusive_get_abandons_hanging_head_after_grace() {
+        let started = std::time::Instant::now();
+        let head = async {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            "head"
+        };
+        let (head_out, get_out) = await_probe_pair(
+            head,
+            async { 206 },
+            |s| *s == 206,
+            Duration::from_millis(50),
+        )
+        .await;
+        assert_eq!(head_out, None);
+        assert_eq!(get_out, 206);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// GET 未给出决定性答复时 HEAD 是唯一元数据来源，必须等到它完成，哪怕超过宽限期。
+    #[tokio::test]
+    async fn inconclusive_get_waits_for_head_beyond_grace() {
+        let head = async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            "head"
+        };
+        let (head_out, get_out) = await_probe_pair(
+            head,
+            async { 200 },
+            |s| *s == 206,
+            Duration::from_millis(10),
+        )
+        .await;
+        assert_eq!(head_out, Some("head"));
+        assert_eq!(get_out, 200);
+    }
+
+    /// HEAD 先于 GET 完成时结果必须保留（不因 GET 决定性而丢弃已到的 HEAD）。
+    #[tokio::test]
+    async fn head_finishing_first_is_kept() {
+        let get = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            206
+        };
+        let (head_out, get_out) =
+            await_probe_pair(async { "head" }, get, |s| *s == 206, Duration::ZERO).await;
+        assert_eq!(head_out, Some("head"));
+        assert_eq!(get_out, 206);
+    }
 
     // -----------------------------------------------------------------------
     // parse_http_date

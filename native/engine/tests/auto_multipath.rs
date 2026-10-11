@@ -336,6 +336,7 @@ async fn run_auto(tag: &str, origin: &TestServer, proxy: &TestServer) -> RunOutc
     let params = DownloadParams {
         spawn_gen: 1,
         unattended: false,
+        preprobed: None,
         auto_proxy: Some(Arc::new(auto_ctx(origin.port, proxy.port))),
         multi_nic: None,
         auto_max_connections: 0,
@@ -448,12 +449,13 @@ async fn fast_proxy_takes_over_slow_direct() {
     );
 }
 
-/// 快直连（3 MiB/s/conn）+ 极慢代理（2 KiB/s/conn）：探索连接被抢占，
-/// 不拖尾；主导标签 `direct:sampled`。
+/// 快直连（1 MiB/s/conn）+ 极慢代理（2 KiB/s/conn）：探索连接被抢占，
+/// 不拖尾；主导标签 `direct:sampled`。直连单连接速率须让任务跨过首个完整
+/// ramp 窗口（起步 4 条连接），否则冷路径根本不会被探索。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn slow_proxy_never_drags_tail() {
     let body = Arc::new(gen_body(BODY_LEN, 0xB2));
-    let origin = start_server(origin_cfg(&body, 3 * MIB)).await;
+    let origin = start_server(origin_cfg(&body, MIB)).await;
     let proxy = start_server(origin_cfg(&body, 2 * KIB)).await;
 
     let out = run_auto("slow_proxy", &origin, &proxy).await;
@@ -468,8 +470,8 @@ async fn slow_proxy_never_drags_tail() {
 
     assert_eq!(out.status, 3, "task must complete");
     assert_bytes_identical(&out.dest, &body).await;
-    // 纯直连估计：24 MiB / (8 × 3 MiB/s) = 1s。
-    let direct_only = Duration::from_secs_f64(BODY_LEN as f64 / (8.0 * 3.0 * MIB as f64));
+    // 纯直连估计：24 MiB / (8 × 1 MiB/s) = 3s。
+    let direct_only = Duration::from_secs_f64(BODY_LEN as f64 / (8.0 * MIB as f64));
     assert!(
         out.elapsed < direct_only + Duration::from_secs(8),
         "took {:?}, direct-only estimate {:?}",

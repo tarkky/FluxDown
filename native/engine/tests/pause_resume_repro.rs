@@ -538,6 +538,11 @@ struct CsResult {
     file_len: i64,
 }
 
+/// 改线程数场景的文件大小。DB 段进度要到后台 fsync 覆盖后的下一个落库周期
+/// 才可见（~6s），4 连接起步时小文件会在「变更窗口」打开前就下完，测试就失去
+/// 「任务未完成」前提。
+const CHANGE_SEGMENTS_FILE_SIZE: usize = 48 * 1024 * 1024;
+
 /// 跑一次"下载一会 → (可选暂停) → 改线程数 → 恢复至完成"，返回关键观测量。
 /// `pause_first=false` 时不手动暂停，直接在下载中改线程数，验证引擎的
 /// 自动暂停/恢复路径。
@@ -559,7 +564,7 @@ async fn run_change_segments(
     }
     tokio::fs::create_dir_all(&work_dir).await.unwrap();
 
-    let size = 6 * 1024 * 1024usize;
+    let size = CHANGE_SEGMENTS_FILE_SIZE;
     let body = Arc::new(gen_body(size, 7));
     let gauge = Arc::new(Gauge::new());
 
@@ -628,6 +633,7 @@ async fn run_change_segments(
 
     // 等到真实分片进度出现即进入变更窗口。不能以并发峰值作等待条件：域名 cap
     // 可能让任务始终单流，等满超时会让小文件先完成，测试失去“活跃任务”前提。
+    // DB 里的是 durable 进度：后台 fsync 覆盖后的下一个落库周期才提交（~6s）。
     let mut waited = 0u64;
     loop {
         let downloaded: i64 = engine
@@ -638,7 +644,7 @@ async fn run_change_segments(
             .iter()
             .map(|s| s.downloaded_bytes)
             .sum();
-        if downloaded >= 256 * 1024 || waited >= 5_000 {
+        if downloaded >= 256 * 1024 || waited >= 10_000 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -748,7 +754,7 @@ async fn run_change_segments(
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "binds a local port; run with --ignored"]
 async fn change_segments_preserves_progress() {
-    let size = 6 * 1024 * 1024i64;
+    let size = CHANGE_SEGMENTS_FILE_SIZE as i64;
 
     // 暂停态增线程 4 → 8：进度精确保留、段行保留、tasks.segments=8、恢复无全量 GET、完成。
     let up = run_change_segments("up_4_8", 4, 8, true).await;

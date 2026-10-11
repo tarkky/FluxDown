@@ -99,6 +99,8 @@ struct ServerState {
     /// 每个 range GET 响应体写出前 sleep 的毫秒数（0 = 不限速）。用于让下载
     /// 持续多个 ramp 评估窗口，以断言渐进启动的初始并发行为。
     throttle_range_ms: u64,
+    /// 每条连接的 range 响应体限速（字节/秒，0 = 不限）：按连接限速的 CDN。
+    per_conn_bps: u64,
     /// fnOS multiple-download 式配额端点：任何带 Range 的请求（含 HEAD）一律
     /// 400 拒绝，仅裸 GET（无 Range 头）可用。
     reject_range_with_400: bool,
@@ -118,6 +120,21 @@ struct ServerState {
     max_range_len: Option<i64>,
     /// Range 起点必须按该字节数对齐；非对齐请求返回 403。
     range_start_alignment: Option<i64>,
+    /// 每客户端并发上限（Hetzner 测速站式）：同时在服务的「分段」range GET 达到
+    /// 该值后，新的分段请求直接 429。
+    max_concurrent_segment_gets: Option<usize>,
+    segment_in_flight: AtomicUsize,
+    /// 按 IP 限流窗口式服务器（USTC 镜像式）：前 N 个「分段」range GET 照常服务，
+    /// 之后的分段请求在窗口毫秒内一律 429，窗口过后恢复。
+    segment_429_window: Option<(usize, u64)>,
+    segment_accepted: AtomicUsize,
+    segment_429_until: Mutex<Option<std::time::Instant>>,
+    /// `/redirect` 签发的终点签名（`/file?sig=N`）；签名小于该值的终点请求 403，
+    /// 模拟签名过期的 CDN 终点。
+    valid_sig: AtomicUsize,
+    redirect_hits: AtomicUsize,
+    /// 前 N 条连接读完请求后不回任何字节直接断开（模拟代理链路 TLS/连接抖动）。
+    drop_first_conns: AtomicUsize,
 
     // --- 计数器（断言用）---
     head_count: AtomicUsize,
@@ -152,6 +169,7 @@ impl ServerState {
             force_full_range_get_once: std::sync::atomic::AtomicBool::new(false),
             range_total_sequence: std::sync::Mutex::new(Vec::new()),
             throttle_range_ms: 0,
+            per_conn_bps: 0,
             reject_range_with_400: false,
             reject_segment_range_with_400: false,
             reject_if_range_with_403: false,
@@ -159,6 +177,14 @@ impl ServerState {
             throttle_full_ms: 0,
             max_range_len: None,
             range_start_alignment: None,
+            max_concurrent_segment_gets: None,
+            segment_in_flight: AtomicUsize::new(0),
+            segment_429_window: None,
+            segment_accepted: AtomicUsize::new(0),
+            segment_429_until: Mutex::new(None),
+            valid_sig: AtomicUsize::new(0),
+            redirect_hits: AtomicUsize::new(0),
+            drop_first_conns: AtomicUsize::new(0),
             head_count: AtomicUsize::new(0),
             full_get_count: AtomicUsize::new(0),
             range_get_count: AtomicUsize::new(0),
@@ -309,10 +335,21 @@ async fn handle_conn(mut stream: TcpStream, st: Arc<ServerState>) -> std::io::Re
         Some(r) => r,
         None => return Ok(()),
     };
+    if st
+        .drop_first_conns
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+        .is_ok()
+    {
+        return Ok(());
+    }
 
-    // 重定向钩子：/redirect → 302 到 /file
+    // 重定向钩子：/redirect → 302 到带签名的 /file?sig=N（N = 当前有效签名）
     if req.path == "/redirect" {
-        let resp = "HTTP/1.1 302 Found\r\nLocation: /file\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        st.redirect_hits.fetch_add(1, Ordering::SeqCst);
+        let resp = format!(
+            "HTTP/1.1 302 Found\r\nLocation: /file?sig={}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            st.valid_sig.load(Ordering::SeqCst)
+        );
         write_all(&mut stream, resp.as_bytes()).await?;
 
         if let Err(error) = stream.shutdown().await
@@ -326,6 +363,17 @@ async fn handle_conn(mut stream: TcpStream, st: Arc<ServerState>) -> std::io::Re
         {
             return Err(error);
         }
+        return Ok(());
+    }
+    if let Some(sig) = req
+        .path
+        .strip_prefix("/file?sig=")
+        .and_then(|s| s.parse::<usize>().ok())
+        && sig < st.valid_sig.load(Ordering::SeqCst)
+    {
+        st.rejected_range_count.fetch_add(1, Ordering::SeqCst);
+        let resp = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        write_all(&mut stream, resp.as_bytes()).await?;
         return Ok(());
     }
 
@@ -458,6 +506,42 @@ async fn handle_conn(mut stream: TcpStream, st: Arc<ServerState>) -> std::io::Re
             .range
             .map(|(s, e)| e.unwrap_or(total - 1).min(total - 1) - s + 1 > 1)
             .unwrap_or(false);
+    if let Some((after, window_ms)) = st.segment_429_window
+        && is_segment_range_get
+    {
+        let now = std::time::Instant::now();
+        let reject = {
+            let mut until = st.segment_429_until.lock().await;
+            match *until {
+                Some(deadline) => now < deadline,
+                None if st.segment_accepted.fetch_add(1, Ordering::SeqCst) >= after => {
+                    *until = Some(now + std::time::Duration::from_millis(window_ms));
+                    true
+                }
+                None => false,
+            }
+        };
+        if reject {
+            st.rejected_range_count.fetch_add(1, Ordering::SeqCst);
+            let resp =
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            write_all(&mut stream, resp.as_bytes()).await?;
+            return Ok(());
+        }
+    }
+    let _segment_slot = match st.max_concurrent_segment_gets {
+        Some(limit) if is_segment_range_get => {
+            if st.segment_in_flight.fetch_add(1, Ordering::SeqCst) >= limit {
+                st.segment_in_flight.fetch_sub(1, Ordering::SeqCst);
+                st.rejected_range_count.fetch_add(1, Ordering::SeqCst);
+                let resp = "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                write_all(&mut stream, resp.as_bytes()).await?;
+                return Ok(());
+            }
+            Some(InFlightSlot(&st.segment_in_flight))
+        }
+        _ => None,
+    };
     if let Some(alignment) = st.range_start_alignment
         && is_segment_range_get
         && req
@@ -695,7 +779,19 @@ async fn handle_conn(mut stream: TcpStream, st: Arc<ServerState>) -> std::io::Re
         return Ok(());
     }
 
-    write_all(&mut stream, &chunk).await?;
+    if st.per_conn_bps > 0 {
+        // 64 KiB 一片，按目标速率把每片的发送时刻排到时间轴上。
+        let started = std::time::Instant::now();
+        let mut sent = 0usize;
+        for piece in chunk.chunks(64 * 1024) {
+            let due = std::time::Duration::from_secs_f64(sent as f64 / st.per_conn_bps as f64);
+            tokio::time::sleep_until((started + due).into()).await;
+            write_all(&mut stream, piece).await?;
+            sent += piece.len();
+        }
+    } else {
+        write_all(&mut stream, &chunk).await?;
+    }
     if std::env::var("RT_TRACE").is_ok() {
         eprintln!(
             "[srv] sent 206 {}-{} ({} bytes), closing",
@@ -730,6 +826,15 @@ async fn handle_conn(mut stream: TcpStream, st: Arc<ServerState>) -> std::io::Re
     }
 
     Ok(())
+}
+
+/// 服务结束（含提前返回 / 出错）时归还并发名额。
+struct InFlightSlot<'a>(&'a AtomicUsize);
+
+impl Drop for InFlightSlot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 // ===========================================================================
@@ -813,6 +918,24 @@ async fn run_coord(
     Result<(), fluxdown_engine::downloader::DownloadError>,
     std::path::PathBuf,
 ) {
+    run_coord_opts(work_dir, task_id, url, total, segments, etag, cancel, false).await
+}
+
+/// 同 [`run_coord`]，`allow_uncap` = Auto 默认档（允许 hint / 任务内解封抬高天花板）。
+#[allow(clippy::too_many_arguments)]
+async fn run_coord_opts(
+    work_dir: &Path,
+    task_id: &str,
+    url: &str,
+    total: i64,
+    segments: i32,
+    etag: &str,
+    cancel: &CancellationToken,
+    allow_uncap: bool,
+) -> (
+    Result<(), fluxdown_engine::downloader::DownloadError>,
+    std::path::PathBuf,
+) {
     let dest = work_dir.join(format!("{task_id}.bin"));
     let client = test_client();
     let db = Db::open(work_dir).await.expect("Db::open");
@@ -857,7 +980,7 @@ async fn run_coord(
         "",
         fluxdown_engine::segment_coordinator::ReportScope::whole_task(),
         0,
-        false,
+        allow_uncap,
         None,
         None,
     )
@@ -1070,6 +1193,7 @@ async fn single_stream_resume_uses_plain_range_without_if_range() {
         ffmpeg_path: None,
         cdn: fluxdown_engine::cdn::CdnTaskInput::default(),
         unattended: false,
+        preprobed: None,
         auto_proxy: None,
         multi_nic: None,
     })
@@ -1242,9 +1366,9 @@ async fn multi_segment_correctness_matrix() {
 // ===========================================================================
 
 /// 服务器对每个分段响应节流 1.2s，请求 8 段下载。旧实现启动瞬间背靠背发起
-/// 8 个并发 Range 请求；渐进启动实现首窗口内只允许 RAMP_INITIAL_WORKERS(=2)
+/// 8 个并发 Range 请求；渐进启动实现首窗口内只允许 RAMP_INITIAL_WORKERS(=4)
 /// 条连接，后续按吞吐反馈扩容。断言：
-///   1. 启动后 1s 内观察到的 range GET 数 <= 3（初始并发 2 + 时序容差 1）；
+///   1. 启动后 1s 内观察到的 range GET 数 <= 5（初始并发 4 + 时序容差 1）；
 ///   2. 下载最终逐字节正确；
 ///   3. 全部 8 个分段都被下载（range GET 总数 >= 8）。
 #[tokio::test(flavor = "current_thread")]
@@ -1296,8 +1420,8 @@ async fn ramp_up_starts_conservatively() {
     res.expect("ramp-up download should succeed");
 
     assert!(
-        early <= 3,
-        "渐进启动首秒并发过高：观察到 {early} 个 range GET（期望 <= 3）"
+        early <= 5,
+        "渐进启动首秒并发过高：观察到 {early} 个 range GET（期望 <= 5）"
     );
     let got = std::fs::read(&dest).expect("read dest");
     assert_eq!(sha256_bytes(&got), expected, "内容必须逐字节一致");
@@ -1313,6 +1437,271 @@ async fn ramp_up_starts_conservatively() {
     {
         eprintln!("best-effort test directory cleanup: {error}");
     }
+}
+
+/// 每客户端并发上限型服务器（Hetzner 测速站：超过上限的连接一律 429）。
+/// 扩容批次里的多条新连接几乎同时被拒，只能算一次「连接过多」证据：任务应
+/// 降额继续多连接下载，绝不能被同一批 429 连续计两次拒绝而打成串行，并把
+/// 主机写成 24h 单连接（后续所有任务都只剩 1 条连接）。
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "binds a local port; run with --ignored"]
+async fn burst_429_from_one_ramp_step_does_not_pin_single_connection() {
+    let work_dir = unique_dir("burst429");
+    let size = 16 * 1024 * 1024usize;
+    let body = Arc::new(gen_body(size, 7));
+    let expected = sha256_bytes(&body);
+    let mut st = ServerState::new(body.clone(), "etag-burst");
+    st.throttle_range_ms = 3000;
+    st.max_concurrent_segment_gets = Some(2);
+    let st = Arc::new(st);
+    let server = start_server(st.clone()).await;
+    let url = server.url("/file");
+    // 进程级域名连接缓存按 host:port 记录，与其它用例互不干扰。
+    let host_key = server.addr.to_string();
+
+    let cancel = CancellationToken::new();
+    let (res, dest) = run_coord(
+        &work_dir,
+        "task-burst429",
+        &url,
+        size as i64,
+        8,
+        "\"etag-burst\"",
+        &cancel,
+    )
+    .await;
+    res.expect("download must survive the 429 burst");
+    let got = std::fs::read(&dest).expect("read dest");
+    assert_eq!(sha256_bytes(&got), expected, "内容必须逐字节一致");
+    assert!(
+        st.rejected_range_count.load(Ordering::SeqCst) >= 2,
+        "场景必须真的产生同批多条 429"
+    );
+
+    // 落盘是异步的：给 persist 任务一点时间。
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let db = Db::open(&work_dir).await.expect("Db::open");
+    let caps = db
+        .get_config("domain_conn_caps")
+        .await
+        .expect("read caps")
+        .unwrap_or_default();
+    let cap = caps
+        .lines()
+        .find_map(|line| {
+            let mut cols = line.split('\t');
+            (cols.next() == Some(host_key.as_str()))
+                .then(|| cols.next().and_then(|c| c.parse::<i32>().ok()))
+                .flatten()
+        })
+        .expect("rejection must record a connection cap for the test host");
+    assert!(cap >= 2, "同批 429 不得把主机钉成单连接，实际 cap={cap}");
+    drop(server);
+
+    if let Err(error) = tokio::fs::remove_dir_all(&work_dir).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("best-effort test directory cleanup: {error}");
+    }
+}
+
+/// 按 IP 限流窗口式服务器（USTC 镜像式）：起步连接正常下了一部分后，后续所有新
+/// 分段请求都被 429，直到限流窗口过去。最后一条在途连接也被拒时任务已有进度——
+/// 必须退避后单连接复活续传完，不能直接把整个任务判失败（那会交给 manager 从头
+/// 爬坡重试）。
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "binds a local port; run with --ignored"]
+async fn all_connections_429_with_progress_revives_single_connection() {
+    let work_dir = unique_dir("all429");
+    let size = 16 * 1024 * 1024usize;
+    let body = Arc::new(gen_body(size, 11));
+    let expected = sha256_bytes(&body);
+    let mut st = ServerState::new(body.clone(), "etag-all429");
+    st.throttle_range_ms = 300;
+    st.segment_429_window = Some((4, 2500));
+    let st = Arc::new(st);
+    let server = start_server(st.clone()).await;
+    let url = server.url("/file");
+
+    let cancel = CancellationToken::new();
+    let started = std::time::Instant::now();
+    let (res, dest) = run_coord(
+        &work_dir,
+        "task-all429",
+        &url,
+        size as i64,
+        8,
+        "\"etag-all429\"",
+        &cancel,
+    )
+    .await;
+    res.expect("全员 429 但已有进度：必须单连接复活下完，而不是整任务失败");
+    let got = std::fs::read(&dest).expect("read dest");
+    assert_eq!(sha256_bytes(&got), expected, "内容必须逐字节一致");
+    assert!(
+        st.rejected_range_count.load(Ordering::SeqCst) >= 1,
+        "场景必须真的产生 429"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "复活退避必须有界，实际 {:?}",
+        started.elapsed()
+    );
+    drop(server);
+
+    if let Err(error) = tokio::fs::remove_dir_all(&work_dir).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("best-effort test directory cleanup: {error}");
+    }
+}
+
+/// 按连接限速 + 每 IP 并发上限的 CDN：4→8 连接近线性增益触发任务内解封（8→16），
+/// 越过上限的新连接被 429。这批拒绝是本任务自己越界造成的——必须回退到解封前的
+/// 8 条继续，不算拒绝、不写域名连接上限（否则后续同主机任务被钉在更低的并发上，
+/// 再来一次真实拒绝就直接打成串行）。
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "binds a local port; run with --ignored"]
+async fn uncap_overshoot_rejection_reverts_without_learning_cap() {
+    let work_dir = unique_dir("uncap-overshoot");
+    let size = 128 * 1024 * 1024usize;
+    let body = Arc::new(gen_body(size, 13));
+    let expected = sha256_bytes(&body);
+    let mut st = ServerState::new(body.clone(), "etag-overshoot");
+    st.per_conn_bps = 2 * 1024 * 1024;
+    // 比天花板 8 多留 4 条余量：测试服务器在关闭连接后才归还名额，8 条连接同时
+    // 换段的瞬时重叠不能被当成真实拒绝；解封到 16 仍必然越界。
+    st.max_concurrent_segment_gets = Some(12);
+    let st = Arc::new(st);
+    let server = start_server(st.clone()).await;
+    let url = server.url("/file");
+    let host_key = server.addr.to_string();
+
+    let cancel = CancellationToken::new();
+    let (res, dest) = run_coord_opts(
+        &work_dir,
+        "task-overshoot",
+        &url,
+        size as i64,
+        8,
+        "\"etag-overshoot\"",
+        &cancel,
+        true,
+    )
+    .await;
+    res.expect("越界被拒后必须回退继续下完");
+    let got = std::fs::read(&dest).expect("read dest");
+    assert_eq!(sha256_bytes(&got), expected, "内容必须逐字节一致");
+    assert!(
+        st.rejected_range_count.load(Ordering::SeqCst) >= 1,
+        "场景必须真的解封越界并产生 429"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let db = Db::open(&work_dir).await.expect("Db::open");
+    let caps = db
+        .get_config("domain_conn_caps")
+        .await
+        .expect("read caps")
+        .unwrap_or_default();
+    // 行格式 `host<TAB>cap<TAB>cap_ts<TAB>hint<TAB>hint_ts`，cap = 0 表示无负面上限；
+    // 正面起步提示（实测证明有效的规模）允许记录。
+    let negative_cap = caps
+        .lines()
+        .find_map(|line| {
+            let mut cols = line.split('\t');
+            (cols.next() == Some(host_key.as_str()))
+                .then(|| cols.next().and_then(|c| c.parse::<i32>().ok()))
+                .flatten()
+        })
+        .unwrap_or(0);
+    assert_eq!(
+        negative_cap, 0,
+        "解封越界的拒绝不得学习域名连接上限，记录：{caps:?}"
+    );
+    drop(server);
+
+    if let Err(error) = tokio::fs::remove_dir_all(&work_dir).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("best-effort test directory cleanup: {error}");
+    }
+}
+
+/// 经 302 下载：返回 (源站跳转命中次数, 分段 range GET 次数, 被拒请求数)。
+/// `expire_after` = 下载开始后多久让已签发的终点签名全部过期。
+async fn redirect_scenario(tag: &str, expire_after: Option<u64>) -> (usize, usize, usize) {
+    let work_dir = unique_dir(tag);
+    let size = 8 * 1024 * 1024usize;
+    let body = Arc::new(gen_body(size, 11));
+    let expected = sha256_bytes(&body);
+    let mut st = ServerState::new(body.clone(), "etag-redirect");
+    st.throttle_range_ms = 600;
+    let st = Arc::new(st);
+    let server = start_server(st.clone()).await;
+    let url = server.url("/redirect");
+    let expiry = expire_after.map(|ms| {
+        let st = st.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            st.valid_sig.store(1, Ordering::SeqCst);
+        })
+    });
+
+    let cancel = CancellationToken::new();
+    let (res, dest) = run_coord(
+        &work_dir,
+        &format!("task-{tag}"),
+        &url,
+        size as i64,
+        8,
+        "\"etag-redirect\"",
+        &cancel,
+    )
+    .await;
+    res.expect("redirected download must succeed");
+    if let Some(expiry) = expiry {
+        expiry.await.expect("expiry task");
+    }
+    let got = std::fs::read(&dest).expect("read dest");
+    assert_eq!(sha256_bytes(&got), expected, "内容必须逐字节一致");
+    let counts = (
+        st.redirect_hits.load(Ordering::SeqCst),
+        st.range_get_count.load(Ordering::SeqCst),
+        st.rejected_range_count.load(Ordering::SeqCst),
+    );
+    drop(server);
+    if let Err(error) = tokio::fs::remove_dir_all(&work_dir).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("best-effort test directory cleanup: {error}");
+    }
+    counts
+}
+
+/// 分段请求直连学到的跳转终点，不再每段重放源站 302（实测每跳热连接 +0.4~0.7s）。
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "binds a local port; run with --ignored"]
+async fn segments_reuse_learned_redirect_target() {
+    let (redirect_hits, range_gets, _) = redirect_scenario("redirect_reuse", None).await;
+    assert!(range_gets >= 8, "场景必须产生多个分段请求（{range_gets}）");
+    // probe 的 HEAD + Range 0-0 与首个分段各跳一次；其余分段直连终点。
+    assert!(
+        redirect_hits <= 4,
+        "{range_gets} 个分段请求触发了 {redirect_hits} 次源站跳转"
+    );
+}
+
+/// 终点签名中途过期：直连终点的 403 不得被当成服务器拒绝或让任务失败，
+/// 必须改回源站 URL 重新跳转并下完。
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "binds a local port; run with --ignored"]
+async fn expired_redirect_target_falls_back_to_origin() {
+    // 400ms：首批连接（起步 4 条，600ms 节流）已用上学到的终点，第二批请求必然
+    // 撞上过期签名。
+    let (redirect_hits, _, rejected) = redirect_scenario("redirect_expire", Some(400)).await;
+    assert!(rejected >= 1, "场景必须真的命中过期终点");
+    assert!(redirect_hits > 3, "过期后必须回源重新跳转");
 }
 
 /// 隔离复现：2 字节单段下载是否稳定 hang。
@@ -1693,6 +2082,26 @@ async fn probe_detects_range_support_and_size() {
     }
 }
 
+/// 两路探测都断在传输层（链路抖动，无任何 HTTP 响应）不是「不支持 Range」的证据：
+/// 必须退避重探拿到 206，而不是立刻 plain GET 兜底把任务判成单连接。
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "binds a local port; run with --ignored"]
+async fn probe_retries_transport_blip_instead_of_single_stream_fallback() {
+    let size = 3_000_000usize;
+    let body = Arc::new(gen_body(size, 5));
+    let st = ServerState::new(body, "et-blip");
+    // 首轮 HEAD 与 Range 0-0 两条连接读完请求后直接断开。
+    st.drop_first_conns.store(2, Ordering::SeqCst);
+    let server = start_server(Arc::new(st)).await;
+    let client = test_client();
+    let info = resolve_file_info(&client, &server.url("/file"), &RequestSpec::empty_get())
+        .await
+        .expect("probe must recover after the blip");
+    assert_eq!(info.total_bytes, size as i64);
+    assert!(info.supports_range, "链路抖动不得把任务降级为单连接");
+    drop(server);
+}
+
 // ===========================================================================
 // 测试 5：服务器中途更换文件内容（ETag 变化）—— 多段拼接应被检出而非静默损坏
 // ===========================================================================
@@ -1808,6 +2217,7 @@ async fn run_full(
     let params = DownloadParams {
         spawn_gen: 1,
         unattended: false,
+        preprobed: None,
         auto_proxy: None,
         multi_nic: None,
         auto_max_connections: 0, // 测试不裁剪 advisor
@@ -1817,7 +2227,10 @@ async fn run_full(
         file_name: file_name.to_string(),
         segment_count,
         is_resume,
-        range_verified: true,
+        // 与 download_manager 浏览器扩展 hint 的真实入口一致：fresh 的 hint 任务
+        // （hint_file_size != 0）Range 能力未经验证 → 保守启动（首枪 plain GET，
+        // 由 RangeVerdict 裁决）；非 hint 任务由 probe 实测，恒 true。
+        range_verified: hint_file_size == 0,
         db: db.clone(),
         client,
         progress_tx: tx,
@@ -1901,6 +2314,7 @@ async fn run_full_server_time(
     let params = DownloadParams {
         spawn_gen: 1,
         unattended: false,
+        preprobed: None,
         auto_proxy: None,
         multi_nic: None,
         auto_max_connections: 0,
@@ -2004,8 +2418,9 @@ async fn use_server_time_applies_last_modified_to_file_mtime() {
 }
 
 // ---------------------------------------------------------------------------
-// use_server_time：暂停期间文件变更（续传 If-Range 失配 → 200 全量重下新版本）
-// 时，mtime 必须采用【新版本】的 Last-Modified，而非 DB 旧 validator 的时间
+// use_server_time：暂停期间文件变更（续传纯 Range 的 206 validator 与 DB 旧基线不符
+// → 丢弃旧前缀、不带 Range 全量重下新版本）时，mtime 必须采用【新版本】的
+// Last-Modified，而非 DB 旧 validator 的时间
 // ---------------------------------------------------------------------------
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "binds a local port; run with --ignored"]
@@ -2047,8 +2462,8 @@ async fn use_server_time_uses_new_last_modified_after_version_change() {
         .await
         .expect("seed partial temp");
 
-    // 单流续传：If-Range("etag-v1") 与服务器 etag-v2 失配 → 200 全量 →
-    // 引擎丢弃旧前缀、从 0 重下【新版本】。
+    // 单流续传：纯 Range（不发 If-Range）的 206 带 etag-v2，与 DB 基线 etag-v1 不符 →
+    // 引擎丢弃旧前缀、不带 Range 从 0 重下【新版本】。
     let client = test_client();
     let speed_limiter = SpeedLimiter::new(0);
     let (tx, mut rx) = mpsc::channel::<ProgressUpdate>(256);
@@ -2064,6 +2479,7 @@ async fn use_server_time_uses_new_last_modified_after_version_change() {
     let params = DownloadParams {
         spawn_gen: 1,
         unattended: false,
+        preprobed: None,
         auto_proxy: None,
         multi_nic: None,
         auto_max_connections: 0,
@@ -3153,6 +3569,7 @@ async fn resume_of_unverified_hint_task_stays_plain_get() {
     let params = DownloadParams {
         spawn_gen: 1,
         unattended: false,
+        preprobed: None,
         auto_proxy: None,
         multi_nic: None,
         auto_max_connections: 16,
@@ -3414,6 +3831,7 @@ async fn manual_real_url_hint_download() {
     let params = DownloadParams {
         spawn_gen: 1,
         unattended: false,
+        preprobed: None,
         auto_proxy: None,
         multi_nic: None,
         auto_max_connections: 16, // 与桌面 App 默认 user_cap 一致

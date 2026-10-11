@@ -200,6 +200,7 @@ fn make_params(
     DownloadParams {
         spawn_gen,
         unattended: false,
+        preprobed: None,
         auto_proxy: None,
         multi_nic: None,
         task_id: "tpr".to_string(),

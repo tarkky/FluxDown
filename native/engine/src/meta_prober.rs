@@ -27,6 +27,39 @@ pub struct ProbedMeta {
     pub total_bytes: i64,
 }
 
+impl ProbedMeta {
+    /// 由下载器完整探测（HEAD ∥ Range GET，见 `downloader::resolve_file_info_with_ua_fallback`）
+    /// 的结果派生启动序幕的名称 / 大小，规则与 [`probe_http_meta`] 一致：
+    /// - text/html / xhtml（登录页、错误页、中转页）的响应头不描述目标文件，不产出名字
+    ///   （大小也不采信）；下载器自己的 HTML 安全网随后照常拦截。
+    /// - 名字只有 Content-Disposition（含 URL 查询里的 CD）才算权威，其余（URL 段 /
+    ///   Content-Type 推断 / `download` 兜底）标记 `name_inferred`，完成期可精修。
+    pub(crate) fn from_file_info(info: &crate::downloader::FileInfo) -> Self {
+        if is_html_content_type(&info.content_type) {
+            return Self::default();
+        }
+        Self {
+            file_name: info.file_name.clone(),
+            name_inferred: !matches!(
+                info.name_source,
+                NameSource::Disposition | NameSource::QueryDisposition
+            ),
+            total_bytes: info.total_bytes.max(0),
+        }
+    }
+}
+
+/// `Content-Type` 是否为 HTML 页面（text/html / application/xhtml+xml）。
+fn is_html_content_type(content_type: &str) -> bool {
+    let mime = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    mime == "text/html" || mime == "application/xhtml+xml"
+}
+
 /// 探测队列任务的文件名和大小。
 ///
 /// `spec` 携带任务的鉴权上下文（cookies / referrer / extra_headers），HTTP HEAD
@@ -541,5 +574,72 @@ mod tests {
         // 整条 magnet 链路：GBK 编码的 dn= 应解出可读中文文件名。
         let name = extract_dn_from_magnet("magnet:?xt=urn:btih:abc&dn=%CE%C4%BC%FE.txt&tr=x");
         assert_eq!(name, "文件.txt");
+    }
+
+    fn file_info(
+        name: &str,
+        source: crate::naming::NameSource,
+        content_type: &str,
+        total: i64,
+    ) -> crate::downloader::FileInfo {
+        crate::downloader::FileInfo {
+            file_name: name.to_string(),
+            name_source: source,
+            total_bytes: total,
+            supports_range: true,
+            content_type: content_type.to_string(),
+            etag: String::new(),
+            last_modified: String::new(),
+            content_encoding_compressed: false,
+        }
+    }
+
+    #[test]
+    fn from_file_info_marks_only_disposition_names_authoritative() {
+        use crate::naming::NameSource;
+        let cd = super::ProbedMeta::from_file_info(&file_info(
+            "a.bin",
+            NameSource::Disposition,
+            "application/octet-stream",
+            42,
+        ));
+        assert_eq!(
+            (cd.file_name.as_str(), cd.name_inferred, cd.total_bytes),
+            ("a.bin", false, 42)
+        );
+        let query_cd = super::ProbedMeta::from_file_info(&file_info(
+            "b.bin",
+            NameSource::QueryDisposition,
+            "",
+            0,
+        ));
+        assert!(!query_cd.name_inferred);
+        let fallback = super::ProbedMeta::from_file_info(&file_info(
+            "download",
+            NameSource::Fallback,
+            "application/octet-stream",
+            -1,
+        ));
+        assert!(fallback.name_inferred);
+        assert_eq!(fallback.total_bytes, 0);
+    }
+
+    #[test]
+    fn from_file_info_html_page_yields_no_name_or_size() {
+        use crate::naming::NameSource;
+        for ct in [
+            "text/html",
+            "Text/HTML; charset=utf-8",
+            "application/xhtml+xml",
+        ] {
+            let meta = super::ProbedMeta::from_file_info(&file_info(
+                "login.php",
+                NameSource::Disposition,
+                ct,
+                512,
+            ));
+            assert!(meta.file_name.is_empty(), "{ct}");
+            assert_eq!(meta.total_bytes, 0, "{ct}");
+        }
     }
 }

@@ -408,7 +408,7 @@ fn without_urls(msg: &str) -> String {
 
 /// 判断错误信息是否属于可自动重试的瞬时网络错误。
 /// 排除永久性错误（404、403、checksum 等），仅重试网络层问题。
-fn is_retriable_error(msg: &str) -> bool {
+pub(crate) fn is_retriable_error(msg: &str) -> bool {
     if let Some(status) = extract_http_status(msg)
         && is_retriable_http_status(status)
     {
@@ -1225,6 +1225,75 @@ async fn persist_start_name(
         .await
 }
 
+/// 序幕的探测能否直接用下载器的完整探测代替 `meta_prober` 的裸 HEAD：仅限 fresh、
+/// 非 hint、无音轨对的 HTTP(S) GET 类任务——恰好是 `run_download` 会自己探测的那一类。
+/// FTP / HLS / DASH / BT / ed2k、非 GET（POST 等重放有副作用）与 hint（探测会作废
+/// 一次性 URL）仍走 `meta_prober` 或不探测，行为不变。
+fn prelude_shares_downloader_probe(params: &DownloadParams) -> bool {
+    !params.is_resume
+        && params.hint_file_size == 0
+        && params.audio_url.is_none()
+        && params.spec.is_get_like()
+        && (params.url.starts_with("http://") || params.url.starts_with("https://"))
+        && !hls_downloader::is_hls_url(&params.url)
+        && !dash_downloader::is_dash_url(&params.url)
+}
+
+/// 启动序幕的名称 / 大小探测。
+///
+/// 满足 [`prelude_shares_downloader_probe`] 的任务用与下载相同的 client / spec 跑
+/// `resolve_file_info_with_ua_fallback`（HEAD ∥ Range GET，conclusive 206 后只再给
+/// HEAD 1s 宽限，含传输抖动重试与 UA / Referer 自适应），成功后：
+/// - 名称 / 大小按 [`crate::meta_prober::ProbedMeta::from_file_info`] 派生（HTML
+///   页面不产出名字）；
+/// - 自适应后的 spec 与下载器一样即时落库，并连同 `FileInfo` 存入
+///   `params.preprobed`，`run_download_inner` 据此跳过第二轮探测。
+///
+/// 探测失败返回空结果并把错误存入 `params.preprobed`：序幕按 URL 兜底命名，下载器
+/// 直接上报该错误，不再重跑同一套重试阶梯。被取消时不设 `preprobed`。其余任务走
+/// `meta_prober`（裸 HEAD / FTP / magnet / ed2k）。
+async fn probe_start_meta(params: &mut DownloadParams) -> crate::meta_prober::ProbedMeta {
+    if !prelude_shares_downloader_probe(params) {
+        return tokio::select! {
+            _ = params.cancel_token.cancelled() => crate::meta_prober::ProbedMeta::default(),
+            r = crate::meta_prober::probe_task_meta(
+                &params.url,
+                &params.file_name,
+                &params.client,
+                &params.proxy_config,
+                &params.spec,
+            ) => r,
+        };
+    }
+    let resolved = tokio::select! {
+        _ = params.cancel_token.cancelled() => return crate::meta_prober::ProbedMeta::default(),
+        r = downloader::resolve_file_info_with_ua_fallback(
+            &params.client,
+            &params.url,
+            &params.spec,
+        ) => r,
+    };
+    match resolved {
+        Ok((info, adapted)) => {
+            if let Some(adapted_spec) = &adapted {
+                downloader::persist_adapted_spec(&params.db, &params.task_id, adapted_spec).await;
+            }
+            let meta = crate::meta_prober::ProbedMeta::from_file_info(&info);
+            params.preprobed = Some(Ok(downloader::PreprobedInfo { info, adapted }));
+            meta
+        }
+        Err(error) => {
+            log_info!(
+                "[download] task {} prelude probe failed: {}",
+                params.task_id,
+                error
+            );
+            params.preprobed = Some(Err(error));
+            crate::meta_prober::ProbedMeta::default()
+        }
+    }
+}
+
 /// spawned task 启动序幕：文件名最终决策。manager 仍是唯一决策链——本函数
 /// 是 `do_start_task` 派生任务的第一步，下载器自身不变更文件名；决策执行
 /// 从 actor 内联挪到各任务自己的序幕，probe 的网络往返不再阻塞 actor
@@ -1277,18 +1346,11 @@ async fn finalize_start_file_name(
     // Step 2: probe（名称仍未知时）。hint 任务（浏览器扩展 / 插件给了大小）不探测：
     // 一次性签名 URL 会被任何请求消耗，下载器也承诺跳过 probe；名字由下方 URL 兜底
     // 占位，完成期再按实际 GET 响应精修。探到的大小留给「文件已存在」询问展示。
+    // 普通 HTTP(S) GET 任务直接跑下载器的完整探测（HEAD ∥ Range GET）并把结果交给
+    // 下载器复用，整个启动只发一轮探测（见 [`probe_start_meta`]）。
     let mut probed_total: Option<i64> = None;
     if params.file_name.is_empty() && params.hint_file_size == 0 {
-        let probed = tokio::select! {
-            _ = params.cancel_token.cancelled() => crate::meta_prober::ProbedMeta::default(),
-            r = crate::meta_prober::probe_task_meta(
-                &params.url,
-                &params.file_name,
-                &params.client,
-                &params.proxy_config,
-                &params.spec,
-            ) => r,
-        };
+        let probed = probe_start_meta(params).await;
         probed_total = Some(probed.total_bytes);
         if !probed.file_name.is_empty() {
             params.file_name = probed.file_name;
@@ -7809,6 +7871,7 @@ impl DownloadManager {
                 auto_proxy: auto_ctx,
                 multi_nic,
                 unattended: task_unattended,
+                preprobed: None,
             };
 
             let reserved_set = Arc::clone(&self.reserved_temp_paths);
@@ -9192,6 +9255,7 @@ impl DownloadManager {
                 auto_proxy: auto_ctx,
                 multi_nic,
                 unattended: task_unattended,
+                preprobed: None,
             };
 
             let reserved_set = Arc::clone(&self.reserved_temp_paths);
