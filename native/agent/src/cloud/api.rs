@@ -339,6 +339,16 @@ impl CloudApi {
             .await
     }
 
+    /// `POST /bt-guard/evidence`（账号鉴权）：BT 防吸血证据上报。遥测红线例外，唯一调用方是
+    /// `bt_guard::evidence`；单批 ≤ 200 条由调用方保证。
+    pub(crate) async fn bt_guard_evidence<P: Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        body: &P,
+    ) -> Result<R, CloudError> {
+        self.authed_as(Method::POST, "/api/v1/bt-guard/evidence", Some(body))
+            .await
+    }
+
     // ---- 云端推送通知（契约 §3，`/api/v1/notifications/*`）----
 
     /// `GET /notifications/catalog`：公开接口（匿名），返回管理员启用的渠道种类（固定顺序）。

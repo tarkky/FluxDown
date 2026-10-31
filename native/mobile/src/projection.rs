@@ -287,6 +287,10 @@ impl Projection {
             | DaemonEvent::ComponentsChanged(_)
             | DaemonEvent::WebhooksChanged(_)
             | DaemonEvent::WebhooksCleared
+            // BT 防吸血：状态变化经 `Notice` 通知宿主刷新；云名单 / 证据事件只由 agent 消费。
+            | DaemonEvent::BtGuardChanged
+            | DaemonEvent::BtGuardCloudRefreshWanted { .. }
+            | DaemonEvent::BtGuardEvidenceReady { .. }
             | DaemonEvent::RssChanged { .. } => None,
             // 整表替换 / 宣告重载：投影已进入加载态，下发「加载态」快照（`tasks_loading = true`）。
             DaemonEvent::SnapshotReplaced(_) | DaemonEvent::TablesReloading { .. } => {

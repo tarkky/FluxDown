@@ -76,7 +76,7 @@ fn every_share_method_is_canonical_unique_and_literal() {
 
 #[test]
 fn protocol_version_covers_the_share_events() {
-    assert_eq!(PROTOCOL_VERSION, 25);
+    assert_eq!(PROTOCOL_VERSION, 26);
     assert_eq!(MIN_PROTOCOL_VERSION, 19);
 }
 

@@ -503,6 +503,18 @@ pub enum DaemonEvent {
         level: String,
         text: String,
     },
+    /// BT 防吸血的条目 / 状态发生变化（UI 据此重新拉取 `daemon.bt.guard.*`）。不改变 daemon 快照。
+    BtGuardChanged,
+    /// daemon 请求 agent 刷新云名单（BT 会话启动时 + 会话存活期间每 6 小时）。`have_sequence` 为
+    /// daemon 当前持有的文档序号（0 = 无）。只供 agent 消费，不转发给 UI；不改变 daemon 快照。
+    BtGuardCloudRefreshWanted {
+        have_sequence: u64,
+    },
+    /// 待上报证据已累积（仅 `bt_guard_report_enabled` 时产生）。`count` 为队列当前条数。
+    /// 只供 agent 消费；不改变 daemon 快照。
+    BtGuardEvidenceReady {
+        count: u32,
+    },
 }
 
 /// agent 自有或转发的状态变化事件。
@@ -867,7 +879,10 @@ pub fn apply_daemon_event(snapshot: &mut DaemonSnapshot, event: &DaemonEvent) {
         | DaemonEvent::TaskNotice(_)
         | DaemonEvent::PluginViewFrame(_)
         | DaemonEvent::PluginViewClosed { .. }
-        | DaemonEvent::PluginToast { .. } => {}
+        | DaemonEvent::PluginToast { .. }
+        | DaemonEvent::BtGuardChanged
+        | DaemonEvent::BtGuardCloudRefreshWanted { .. }
+        | DaemonEvent::BtGuardEvidenceReady { .. } => {}
         DaemonEvent::SnapshotReplaced(replacement) => snapshot.clone_from(replacement),
         DaemonEvent::TablesReloading { tasks, queue } => snapshot.begin_reload(*tasks, *queue),
         DaemonEvent::Engine(message) => apply_engine_message(snapshot, message),

@@ -188,6 +188,7 @@ pub async fn start_embedded(
         remote_task,
         device_meta_task,
         cdn_task,
+        bt_guard_task,
         notify_task,
         #[cfg(feature = "share-p2p")]
         share,
@@ -214,6 +215,7 @@ pub async fn start_embedded(
 
     let mut tasks: Vec<(&'static str, JoinHandle<()>)> = vec![
         ("CDN", cdn_task),
+        ("BT guard", bt_guard_task),
         ("cloud notify", notify_task),
         ("cloud sync", sync_task),
         ("remote tasks", remote_task),

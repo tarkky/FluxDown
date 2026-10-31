@@ -293,6 +293,9 @@ impl GatewayService {
         if self.server_mode && server_mode_denies(&request, self.local_log_export) {
             return Err(RpcErrorData::new(ApplicationErrorCode::Unsupported, false));
         }
+        if internal_daemon_method(&request.method) {
+            return Err(RpcErrorData::new(ApplicationErrorCode::Unsupported, false));
+        }
         match request.method.as_str() {
             method::SYSTEM_PING => Ok(serde_json::json!({ "ok": true })),
             // 线上快照只带头；任务表与队列位置表经 `system.taskPage` 分页（协议 `table_sync`）。
@@ -2378,6 +2381,19 @@ impl GatewayService {
     }
 }
 
+/// 只供 agent 自身调用的 `daemon.*` 方法：UI Gateway 与远端 `/rpc` 的 `daemon.*` 透传一律拒绝。
+///
+/// - `daemon.bt.guard.cloud.apply`：参数是「agent 已验签」的云名单；放开它等于让任意客户端
+///   绕过签名替换封禁名单。
+/// - `daemon.bt.guard.evidence.drain`：弹出待上报证据；证据只能经 `bt_guard` 模块（遥测红线例外）
+///   上报，任意客户端取走会让证据丢失，且泄露对端 IP 与 infohash。
+fn internal_daemon_method(method_name: &str) -> bool {
+    matches!(
+        method_name,
+        method::DAEMON_BT_GUARD_CLOUD_APPLY | method::DAEMON_BT_GUARD_EVIDENCE_DRAIN
+    )
+}
+
 /// 允许「本机来源」在 server 模式下调用的 `agent.platform.*` 子集。
 ///
 /// 只放行「与本机文件系统交互、但无系统级副作用」的打开 / 定位 / 复制任务产物到剪贴板。**不含**
@@ -4289,6 +4305,80 @@ mod tests {
             }
         }
         harness.finish().await;
+    }
+
+    /// `daemon.bt.guard.cloud.apply` 携带「agent 已验签」的云名单、`daemon.bt.guard.evidence.drain` 弹出
+    /// 待上报证据：两者只有 agent 自己的 `bt_guard` 模块调用，经 Gateway 的任何会话（本机 UI、访问密钥、
+    /// 配对设备）一律拒绝；其余 `daemon.bt.guard.*` 照常透传给 daemon。
+    #[tokio::test]
+    async fn bt_guard_internal_daemon_methods_are_denied_to_every_session_kind() {
+        use super::session_auth::RpcCredential;
+        use fluxdown_protocol::method;
+
+        let internal = [
+            method::DAEMON_BT_GUARD_CLOUD_APPLY,
+            method::DAEMON_BT_GUARD_EVIDENCE_DRAIN,
+        ];
+        let forwarded = [
+            method::DAEMON_BT_GUARD_STATE,
+            method::DAEMON_BT_GUARD_ENTRIES_LIST,
+            method::DAEMON_BT_GUARD_ENTRIES_ADD,
+            method::DAEMON_BT_GUARD_ENTRIES_REMOVE,
+            method::DAEMON_BT_GUARD_EVENTS_LIST,
+            method::DAEMON_BT_GUARD_EXPORT,
+            method::DAEMON_BT_GUARD_FILTER_SOURCES_REFRESH,
+        ];
+        for server_mode in [false, true] {
+            let harness = TestGateway::new_mode("bt_guard_internal", server_mode).await;
+            let sessions = [
+                ("local agent", super::SessionContext::local(true)),
+                (
+                    "access key",
+                    super::SessionContext::new(false, RpcCredential::AccessKey("key".to_owned())),
+                ),
+                (
+                    "paired device",
+                    super::SessionContext::new(
+                        false,
+                        RpcCredential::Device {
+                            token: "token".to_owned(),
+                            fingerprint: "fingerprint".to_owned(),
+                        },
+                    ),
+                ),
+            ];
+            for (label, session) in &sessions {
+                for method_name in internal.iter().chain(forwarded.iter()).copied() {
+                    let response = harness
+                        .service
+                        .call_with(
+                            session,
+                            RpcRequest::new(
+                                RequestId::Integer(1),
+                                method_name,
+                                Some(serde_json::json!({})),
+                            ),
+                        )
+                        .await;
+                    let RpcResponse::Failure(failure) = response else {
+                        panic!("{method_name} must fail against the disconnected test daemon");
+                    };
+                    let data = failure.error.data.expect("application error data");
+                    let expected = if internal.contains(&method_name) {
+                        // 网关直接拒绝，根本不会触达 daemon。
+                        ApplicationErrorCode::Unsupported
+                    } else {
+                        // 透传给（未连接的）daemon：失败原因是 daemon 不可用，而不是被网关拒绝。
+                        ApplicationErrorCode::Unavailable
+                    };
+                    assert_eq!(
+                        data.code, expected,
+                        "{method_name} for {label} (server mode: {server_mode})"
+                    );
+                }
+            }
+            harness.finish().await;
+        }
     }
 
     #[tokio::test]

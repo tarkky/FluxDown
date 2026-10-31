@@ -346,6 +346,7 @@ async fn run_agent(
         remote_task,
         device_meta_task,
         cdn_task,
+        bt_guard_task,
         notify_task,
         #[cfg(feature = "share-p2p")]
         share,
@@ -593,6 +594,7 @@ async fn run_agent(
     for (task, handle) in [
         ("daemon event projection", event_task),
         ("CDN", cdn_task),
+        ("BT guard", bt_guard_task),
         ("cloud notify", notify_task),
         ("cloud sync", sync_task),
         ("remote tasks", remote_task),
@@ -842,6 +844,7 @@ pub(crate) struct CloudServices {
     pub(crate) remote_task: tokio::task::JoinHandle<()>,
     pub(crate) device_meta_task: tokio::task::JoinHandle<()>,
     pub(crate) cdn_task: tokio::task::JoinHandle<()>,
+    pub(crate) bt_guard_task: tokio::task::JoinHandle<()>,
     pub(crate) notify_task: tokio::task::JoinHandle<()>,
     /// FluxMesh服务（`share-p2p` 编入且装配成功时存在）。
     #[cfg(feature = "share-p2p")]
@@ -909,6 +912,10 @@ pub(crate) async fn start_cloud_services(
         crate::cdn_worker::CdnWorker::new(api.clone(), daemon.as_ref().clone(), events.clone())
             .run(cancel.clone()),
     );
+    let bt_guard_task = tokio::spawn(
+        crate::bt_guard::BtGuardWorker::new(api.clone(), daemon, events.clone(), store.data_dir())
+            .run(cancel.clone()),
+    );
     #[cfg(feature = "share-p2p")]
     let (share, share_task) = {
         let parts = crate::share::ShareServiceParts {
@@ -942,6 +949,7 @@ pub(crate) async fn start_cloud_services(
         remote_task,
         device_meta_task,
         cdn_task,
+        bt_guard_task,
         notify_task,
         #[cfg(feature = "share-p2p")]
         share,

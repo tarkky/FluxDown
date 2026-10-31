@@ -38,9 +38,10 @@ pub const JSONRPC_VERSION: &str = "2.0";
 /// `ErrorReason::ShareSwarm{QuotaExhausted, LoginRequired}`，v24 增加合规：`agent.share.report` / `appeal`、
 /// `ShareStatus::Takedown`、`ShareDto.{takedownReason, appeal}`、`ErrorReason::Share{StrikeLimited, AppealExists}`，
 /// v25 增加周期会员卡：`CloudPlan.billingPeriodDays`、`CloudProfile` / `AgentSessionDto.activeSubscription`、
-/// `ErrorReason::SubscriptionConflict`
+/// `ErrorReason::SubscriptionConflict`，v26 增加 BT 防吸血：`daemon.bt.guard.*` 方法、
+/// `DaemonEvent::{BtGuardChanged, BtGuardCloudRefreshWanted, BtGuardEvidenceReady}` 与 `BtPeerDto` 嫌疑字段
 /// （纯增量，旧客户端忽略未知字段与方法）。
-pub const PROTOCOL_VERSION: u32 = 25;
+pub const PROTOCOL_VERSION: u32 = 26;
 /// 旧客户端不能解析新增的云端暂存 / 桥接方法与字段语义（UI 会把云端副本当成实时分享展示），必须在握手时拒绝混用。
 pub const MIN_PROTOCOL_VERSION: u32 = 19;
 /// 服务收到 `system.shutdown` 而退出时的 WebSocket 关闭原因：客户端据此停止重连与重拉。

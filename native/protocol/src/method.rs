@@ -170,6 +170,25 @@ pub const DAEMON_CDN_CONFIG_APPLY: &str = "daemon.cdnConfig.apply";
 pub const DAEMON_EGRESS_PLAN: &str = "daemon.egress.plan";
 
 pub const DAEMON_BT_TRACKER_SUBSCRIPTION_REFRESH: &str = "daemon.bt.trackerSubscription.refresh";
+/// BT 防吸血状态总览（`BtGuardStateDto`）。
+pub const DAEMON_BT_GUARD_STATE: &str = "daemon.bt.guard.state";
+/// 过滤条目分页（`BtGuardEntriesListParams` → `BtGuardEntriesListDto`）。
+pub const DAEMON_BT_GUARD_ENTRIES_LIST: &str = "daemon.bt.guard.entries.list";
+/// 手动添加条目 / 白名单（`BtGuardEntriesAddParams` → `BtGuardEntryDto`）。
+pub const DAEMON_BT_GUARD_ENTRIES_ADD: &str = "daemon.bt.guard.entries.add";
+/// 按 id 移除条目（`BtGuardEntriesRemoveParams` → `BtGuardEntriesRemoveDto`）；云层条目拒绝。
+pub const DAEMON_BT_GUARD_ENTRIES_REMOVE: &str = "daemon.bt.guard.entries.remove";
+/// 事件日志分页（`BtGuardEventsListParams` → `BtGuardEventsListDto`）。
+pub const DAEMON_BT_GUARD_EVENTS_LIST: &str = "daemon.bt.guard.events.list";
+/// 导出条目文本（`BtGuardExportParams` → `BtGuardExportDto`）。慢方法：条目可达数万行。
+pub const DAEMON_BT_GUARD_EXPORT: &str = "daemon.bt.guard.export";
+/// 立即刷新过滤文件订阅（无参）。慢方法：会拉取网络。
+pub const DAEMON_BT_GUARD_FILTER_SOURCES_REFRESH: &str = "daemon.bt.guard.filterSources.refresh";
+/// 仅 agent 调用：已验签的云名单整层替换（`BtGuardCloudApplyParams` → `BtGuardCloudApplyDto`）。
+/// 慢方法：差异防护 + 整层重建 + 持久化。
+pub const DAEMON_BT_GUARD_CLOUD_APPLY: &str = "daemon.bt.guard.cloud.apply";
+/// 仅 agent 调用：弹出待上报证据（`BtGuardEvidenceDrainDto`）。
+pub const DAEMON_BT_GUARD_EVIDENCE_DRAIN: &str = "daemon.bt.guard.evidence.drain";
 pub const DAEMON_ED2K_SERVER_SUBSCRIPTION_REFRESH: &str = "daemon.ed2k.serverSubscription.refresh";
 pub const DAEMON_DIAGNOSTICS_DESCRIBE: &str = "daemon.diagnostics.describe";
 pub const DAEMON_DIAGNOSTICS_PREPARE_LOG_EXPORT: &str = "daemon.diagnostics.prepareLogExport";
@@ -549,6 +568,15 @@ pub const ALL_METHODS: &[&str] = &[
     DAEMON_CDN_REPORTS_ACK,
     DAEMON_CDN_CONFIG_APPLY,
     DAEMON_EGRESS_PLAN,
+    DAEMON_BT_GUARD_STATE,
+    DAEMON_BT_GUARD_ENTRIES_LIST,
+    DAEMON_BT_GUARD_ENTRIES_ADD,
+    DAEMON_BT_GUARD_ENTRIES_REMOVE,
+    DAEMON_BT_GUARD_EVENTS_LIST,
+    DAEMON_BT_GUARD_EXPORT,
+    DAEMON_BT_GUARD_FILTER_SOURCES_REFRESH,
+    DAEMON_BT_GUARD_CLOUD_APPLY,
+    DAEMON_BT_GUARD_EVIDENCE_DRAIN,
     DAEMON_BT_TRACKER_SUBSCRIPTION_REFRESH,
     DAEMON_ED2K_SERVER_SUBSCRIPTION_REFRESH,
     DAEMON_DIAGNOSTICS_DESCRIBE,
@@ -714,6 +742,9 @@ pub const SLOW_DAEMON_METHODS: &[&str] = &[
     DAEMON_WEBHOOK_TEST,
     DAEMON_BT_TRACKER_SUBSCRIPTION_REFRESH,
     DAEMON_ED2K_SERVER_SUBSCRIPTION_REFRESH,
+    DAEMON_BT_GUARD_EXPORT,
+    DAEMON_BT_GUARD_FILTER_SOURCES_REFRESH,
+    DAEMON_BT_GUARD_CLOUD_APPLY,
     DAEMON_FS_LIST,
     DAEMON_DIAGNOSTICS_PROBE,
     DAEMON_DIAGNOSTICS_FIX_COMPONENT,

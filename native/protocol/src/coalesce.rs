@@ -243,7 +243,10 @@ fn daemon_touch(event: &DaemonEvent) -> Touch<'_> {
         | DaemonEvent::TaskNotice(_)
         | DaemonEvent::PluginViewFrame(_)
         | DaemonEvent::PluginViewClosed { .. }
-        | DaemonEvent::PluginToast { .. } => Touch::None,
+        | DaemonEvent::PluginToast { .. }
+        | DaemonEvent::BtGuardChanged
+        | DaemonEvent::BtGuardCloudRefreshWanted { .. }
+        | DaemonEvent::BtGuardEvidenceReady { .. } => Touch::None,
     }
 }
 
