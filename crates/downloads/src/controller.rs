@@ -101,6 +101,13 @@ pub enum DownloadsCommand {
     TaskSpeedHistory(fluxdown_protocol::TaskSpeedHistoryQuery),
     /// 读取 BT 任务的 peer / tracker 实况（`daemon.task.btStatus`），详情页轮询。
     BtStatus(fluxdown_protocol::DaemonBtStatusParams),
+    /// 防吸血：给 IP 组加封禁 / 限速 / 加白条目（`daemon.bt.guard.entries.add`），连接页右键菜单用。
+    BtGuardAddEntry(fluxdown_protocol::BtGuardEntriesAddParams),
+    /// 防吸血「查看证据」：读取该 IP 组相关的名单条目与近期事件，结果为
+    /// [`DownloadsResult::BtGuardEvidence`]。
+    BtGuardEvidence {
+        ip_group: String,
+    },
     Create(Box<fluxdown_protocol::DaemonCreateTaskParams>),
     /// 批量建任务（`daemon.task.createMany`）：整块一个事务、按 `batch_id` 幂等，
     /// 结果不确定时可原样重发。
@@ -312,6 +319,8 @@ pub enum DownloadsResult {
     TaskSpeedHistory(Option<fluxdown_protocol::TaskSpeedHistoryDto>),
     /// `BtStatus` 的 peer / tracker 实况。
     BtStatus(fluxdown_protocol::BtStatusDto),
+    /// `BtGuardEvidence` 的名单条目与事件。
+    BtGuardEvidence(BtGuardEvidence),
     Preview(fluxdown_protocol::ResolvePreviewResponse),
     /// `FileIcon` 的 PNG 字节。
     FileIcon(Vec<u8>),
@@ -329,6 +338,14 @@ pub struct TorrentShare {
     pub magnet: String,
     /// `.torrent` 文件内容；未请求或纯磁力任务（库里没有种子字节）为 `None`。
     pub torrent: Option<Vec<u8>>,
+}
+
+/// [`DownloadsResult::BtGuardEvidence`] 载荷：宿主按 IP 组精确查询得到的条目（覆盖该 IP 的
+/// 全部名单层）与事件（该 IP 组的事件），UI 直接展示，不再客户端筛选。
+#[derive(Clone, Debug, Default)]
+pub struct BtGuardEvidence {
+    pub entries: Vec<fluxdown_protocol::BtGuardEntryDto>,
+    pub events: Vec<fluxdown_protocol::BtGuardEventDto>,
 }
 
 impl DownloadsResult {

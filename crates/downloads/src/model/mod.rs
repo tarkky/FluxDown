@@ -1,4 +1,5 @@
 pub(crate) mod aria2c;
+pub(crate) mod bt_guard;
 pub(crate) mod bt_trackers;
 pub(crate) mod categories;
 pub(crate) mod counts;
