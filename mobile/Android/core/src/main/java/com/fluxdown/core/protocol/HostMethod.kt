@@ -129,6 +129,17 @@ object HostMethod {
     const val daemonCdnConfigApply = "daemon.cdnConfig.apply"
     const val daemonEgressPlan = "daemon.egress.plan"
     const val daemonBtTrackerSubscriptionRefresh = "daemon.bt.trackerSubscription.refresh"
+    const val daemonBtGuardState = "daemon.bt.guard.state"
+    const val daemonBtGuardEntriesList = "daemon.bt.guard.entries.list"
+    const val daemonBtGuardEntriesAdd = "daemon.bt.guard.entries.add"
+    const val daemonBtGuardEntriesRemove = "daemon.bt.guard.entries.remove"
+    const val daemonBtGuardEventsList = "daemon.bt.guard.events.list"
+    const val daemonBtGuardExport = "daemon.bt.guard.export"
+    const val daemonBtGuardFilterSourcesRefresh = "daemon.bt.guard.filterSources.refresh"
+    /** 仅 agent 内部调用（已验签云名单整层替换）；UI 不得使用，原生桥通用通道会拒绝。 */
+    const val daemonBtGuardCloudApply = "daemon.bt.guard.cloud.apply"
+    /** 仅 agent 内部调用（弹出待上报证据）；UI 不得使用，原生桥通用通道会拒绝。 */
+    const val daemonBtGuardEvidenceDrain = "daemon.bt.guard.evidence.drain"
     const val daemonEd2kServerSubscriptionRefresh = "daemon.ed2k.serverSubscription.refresh"
     const val daemonDiagnosticsDescribe = "daemon.diagnostics.describe"
     const val daemonDiagnosticsPrepareLogExport = "daemon.diagnostics.prepareLogExport"
