@@ -32,6 +32,7 @@ node dist/server/entry.mjs
 - 举报：落地页（清单可用的状态，含「未就绪」）有紧凑的「举报」按钮，展开为小表单（原因下拉：侵权 / 违法违规 / 恶意软件 / 其他，可选补充说明与联系方式，清单带 `turnstileSiteKey` 时附 Turnstile），经 `POST /api/cloud/share/public/<slug>/report`（`{ reason ≤ 64, detail? ≤ 2000, contact? ≤ 200, turnstileToken? }` → FluxCloud 同名端点，成功 204，失败透传，每 IP 每小时 5 次由 FluxCloud 限）。发给上游的 reason 是固定中文文本，界面文案随语言。
 - 环境变量只用已有的 `FLUXCLOUD_API_BASE`（FluxCloud 根地址，无 `/api` 前缀，缺省 `http://127.0.0.1:8720`；与 `/api/cloud/*` 同一个 `cloudBase()`）。
 - 回归：`bun test tests/share-landing.test.ts tests/share-proxy.test.ts`（替换 FluxCloud fetch，不代表真实上游与 Turnstile 演练）。
+- BT 防吸血自查 / 申诉：`/bt-guard`（en）与 `/zh/bt-guard`（zh）是静态外壳（可索引、进 sitemap，不含个人信息），`src/components/btguard/BtGuardSelfCheck.tsx` 在浏览器里经同源代理 `GET /api/cloud/bt-guard/self` 现取访客自己的结果（FluxCloud `GET /api/v1/bt-guard/public/self`，只回答请求来源 IP 所在组，经 `X-Forwarded-For` 透传访客 IP）：`{ listed, ipGroup?, entries[{ reason, category, action, expiresAt(unix 秒) }], turnstileSiteKey?, appealPending? }`。已列入且无待处理申诉时给申诉表单，经 `POST /api/cloud/bt-guard/appeal`（`{ detail ≤ 2000, contact? 邮箱 ≤ 200, turnstileToken? }` → FluxCloud `POST /api/v1/bt-guard/public/appeal`，成功 204，失败透传 404 `not_listed` / 409 `appeal_pending` / 403|400 `turnstile_*` / 429）。代理响应 no-store + `X-Robots-Tag: noindex`；逻辑在 `src/lib/bt-guard.ts`（解析 / 校验）与 `src/lib/bt-guard-proxy.ts`（上游调用，复用 `share-proxy.ts::callUpstream`）。隐私政策 `#bt-guard` 一节说明证据上报。回归：`bun test tests/bt-guard-proxy.test.ts`。
 
 ## 结构
 

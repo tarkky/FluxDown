@@ -64,6 +64,20 @@ export const legal = defineMessages({
           ],
         },
         {
+          id: "bt-guard",
+          title: "BT Leech Protection Evidence Reports",
+          body: 'The BT leech protection feature can optionally report evidence about abusive BitTorrent peers to FluxDown so that a shared, signed block list can be built. <strong>It is off by default, and nothing is reported unless you are signed in and have explicitly turned on the evidence reporting switch.</strong> Detection itself runs only on your device. If you turn reporting on, we process:',
+          items: [
+            "<strong>What is reported:</strong> for each peer that matched a detection rule: the peer's IP address group (a single IPv4 address, or an IPv6 /64 network), the rule that matched, metering figures (bytes delivered to it, redundant bytes, the delivered-to-torrent-size ratio, re-request and rewind counters), the time range it was observed in, and the peer's client fingerprint (the peer ID prefix and client name it announced).",
+            "<strong>Torrent identifier:</strong> the torrent's infohash is turned into a one-way keyed hash (HMAC) with a secret key on our server as soon as it arrives. The original infohash is never stored, so the hash cannot be traced back to a torrent.",
+            "<strong>What is never reported:</strong> file names, paths and torrent names are not included. Private torrents are never reported. Peers on local, loopback and link-local networks are never reported.",
+            "<strong>Purpose:</strong> reports from many signed-in users are compared; only when several independent users report the same address group for several different torrents is it added to a public, signed block list that the apps can download. A single report never lists anyone.",
+            "<strong>Retention:</strong> evidence is deleted after a 14-day window. A list entry is taken down automatically 14 days after the last new evidence for it.",
+            "<strong>Third-party data:</strong> the block list also contains community data from BTN-Collected-Rules by PBH-BTN, licensed under CC BY 4.0 (" + ext("https://github.com/PBH-BTN/BTN-Collected-Rules", "source") + ").",
+            "<strong>If you were listed:</strong> list entries are shown by IP address group only, never with personal data. You can check whether your current IP address is listed, see the reason and the expiry time, and file an appeal on the <a href=\"/bt-guard\">BT leech protection self-check page</a>. Approved appeals are removed and allow-listed.",
+          ],
+        },
+        {
           id: "not-collect",
           title: "Information We Do NOT Collect",
           body: "FluxDown is designed with a local-first architecture. The FluxDown apps:",
@@ -358,6 +372,20 @@ export const legal = defineMessages({
             "<strong>网络与传输诊断：</strong>应用在「网络诊断」「传输诊断」页面向您展示的同一份诊断数据，在分享或接收期间也会发送给 FluxDown：NAT 类型、IPv4 / IPv6 可用性、公网 IP 及其大致归属、各中继延迟、点对点连接计数，以及每次传输的连接路径、往返时延、速率、丢包与错误。当您的设备通过「共享」向其他设备提供内容时，每条连接同样是一次传输：除上述数据外，还包括对端设备的随机网络 ID、所属分享，以及您向该设备提供了哪些内容（文件哈希，不含文件名与路径）、各发送了多少字节与数据块。网络快照只在分享活动期间发生变化时发送；传输详情在传输进行中每隔几秒发送一次、结束时发送一次。不分享也不接收时不发送任何内容，也不包含其他下载任务、链接或目录。",
             "<strong>共享计量：</strong>通过「共享」传输时，收发双方各自上报逐对端的字节数（对端设备的随机网络 ID 与字节数，不含文件名与路径）。这些数据用于核对并计算共享加速额度的消耗与贡献，保存期限与传输会话一致。",
             "<strong>保存期限：</strong>访问记录、网络诊断与传输详情按服务器设定的期限（默认 30 天）后删除；公布网络地址的历史默认保留 90 天。分享结束后取件码立即释放，分享记录保留在分享者的分享历史中。",
+          ],
+        },
+        {
+          id: "bt-guard",
+          title: "BT 防吸血证据上报",
+          body: 'BT 防吸血功能可以选择性地把恶意 BitTorrent 对端的证据上报给 FluxDown，用于生成共享的签名黑名单。<strong>该功能默认关闭；只有您已登录并明确开启「证据上报」开关后才会上报任何内容。</strong>检测本身只在您的设备上运行。开启上报后，我们会处理：',
+          items: [
+            "<strong>上报内容：</strong>对每个命中检测规则的对端：其 IP 地址组（单个 IPv4 地址，或 IPv6 /64 网络）、命中的规则、计量数据（向其送达的字节数、重复字节数、送达量与种子体积之比、重复请求与回退计数）、观察到的时间段，以及对端的客户端特征（其声明的 peer ID 前缀与客户端名称）。",
+            "<strong>种子标识：</strong>种子的 infohash 在到达我们服务器时立即用服务端密钥做单向散列（HMAC），不保存原值，散列值无法反推出具体种子。",
+            "<strong>绝不上报的内容：</strong>不包含文件名、路径与种子名；私有种子永不上报；局域网、回环与链路本地地址的对端永不上报。",
+            "<strong>用途：</strong>我们对多位已登录用户的上报做交叉比对；只有多个独立用户针对多个不同种子上报同一地址组时，才会把它加入应用可下载的公开签名名单。单次上报不会使任何人被列入。",
+            "<strong>保存期限：</strong>证据在 14 天窗口后删除；名单条目在最近一次新证据后 14 天无新证据即自动下架。",
+            "<strong>第三方数据：</strong>名单还包含来自 PBH-BTN 的 BTN-Collected-Rules 的社区数据，采用 CC BY 4.0 许可（" + ext("https://github.com/PBH-BTN/BTN-Collected-Rules", "来源") + "）。",
+            "<strong>如果您被列入名单：</strong>名单条目只以 IP 地址组展示，不含任何个人信息。您可以在 <a href=\"/zh/bt-guard\">BT 防吸血自查页</a> 查询当前 IP 地址是否在名单中、查看原因与到期时间并提出申诉；申诉通过后条目会被移除并加入白名单。",
           ],
         },
         {

@@ -35,11 +35,11 @@ export interface ShareFailure {
 
 export type ShareGrantResult = { ok: true; grant: ShareGrant } | ShareFailure;
 
-function failure(status: number, code: string, extra: Partial<ShareFailure> = {}): ShareFailure {
+export function failure(status: number, code: string, extra: Partial<ShareFailure> = {}): ShareFailure {
   return { ok: false, status, code, ...extra };
 }
 
-async function callUpstream(
+export async function callUpstream(
   path: string,
   init: { method: string; headers?: Record<string, string>; body?: string },
   ip: string,

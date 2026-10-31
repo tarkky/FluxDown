@@ -24,6 +24,8 @@ Before headless setup is complete, `/download`, `/download/batch`, and `/jsonrpc
 
 When management is enabled, `GET /api/v1/openapi.json` provides an unauthenticated interface description. The legacy `fluxdown-server` extension REST routes (`/api/v1/config`, queue CRUD, stats, fs/list, components, webhooks, logs, `/api/v1/ws`, and `/api/v1/token/regenerate`) are no longer offered by the new host: use the Web UI or `/rpc`. Unauthenticated `GET /api/v1/setup/status` and `POST /api/v1/setup` bootstrap the first key; the latter only accepts requests while no key is set.
 
+The BT anti-leech routes live under `/api/v1/bt/guard/{state,entries,events}` in the same management group; see [BT Anti-Leech](/docs/en/protocols/bt-guard/#rest-api).
+
 ## Authentication
 
 Compatibility APIs and the Web UI share a user access key, persisted by the agent as `gateway_user_token`. Legacy `local_server_token` values are imported during migration. This is distinct from internal `agent.token` and `daemon.token` credentials.
