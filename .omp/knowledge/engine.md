@@ -84,9 +84,9 @@
   可用 peer 仅 5–10）；连接中数量由 `connect_rate` × 超时另行约束。下调前先实测。
 - **uTP（`bt_enable_utp`，默认开）**：开启时监听模式为 `TcpAndUtp`，出站并发拨 TCP + uTP；
   #825 实测在上限 512 基础上稳态再翻倍，代价是 UDP 收发的系统态 CPU 明显更高（上游仍标为
-  experimental）。改动经 daemon 重建共享会话生效。librqbit 来自 `zerx-lab/rqbit` 的 `main`
-  （上游 main + MSE + Android HTTPS + 握手超时下发 + 初检末尾暂停不丢失），升级上游时先在该
-  fork 的 main 合并上游，再改根 `Cargo.toml` 的 rev。`librqbit-utp` 临时 patch 到上游 git main：
+  experimental）。改动经 daemon 重建共享会话生效。librqbit 来自 `zerx-lab/rqbit`（当前 rev 在分支 `fluxdown/peer-policy`：
+  上游 main + MSE + Android HTTPS + 握手超时下发 + 初检末尾暂停不丢失 + 防吸血 `PeerPolicy` 钩子），升级上游时在 fork 新开
+  `fluxdown/*` 分支合并上游并推送，再改根 `Cargo.toml` 的 rev（`zerx/main` 停在 00374a6d，不再是事实源）。`librqbit-utp` 临时 patch 到上游 git main：
   crates.io 0.7.0 的分发循环遇 Windows `WSAECONNRESET(10054)` 即退出，整个会话 uTP 失效；
   上游发版后删 patch。
 - **BT 会话保活与完成校验**：`maybe_release_bt_session` 在存在「已暂停的未完成
@@ -121,8 +121,11 @@
   （地址 / 客户端 / 传输 / 累计 / 速度）与逐 tracker 状态，详情页「Tracker / 连接」页签每 2 秒轮询。librqbit 不暴露 tracker 汇报状态，
   所以 `bt_status::layer()` 旁路采集 `tracker_comms` 的 `http_tracker` / `udp_tracker` span 与 announce 事件（成功 / 失败 / 休眠间隔），
   **必须挂在宿主全局 subscriber 上**（现仅 `engine/logger.rs` 挂；其它宿主自装 subscriber 时 tracker 状态显示「未知」，`bt_status::installed()`
-  判定）。peer 速度 = 相邻两次采样的字节差（`apply_speeds`，同任务多客户端轮询共享采样，间隔 <400ms 沿用上次值）。与 qBittorrent 的差距：
-  无增删 / 编辑 tracker、无强制重新汇报、无 peer 进度 / flags / 国家、无封禁 peer、tracker 无 seeds / leeches / 完成数（librqbit 不提供）。
+  判定）。peer 速度 = 相邻两次采样的字节差（`apply_speeds`，同任务多客户端轮询共享采样，间隔 <400ms 沿用上次值）。`BtPeerDto` 另带防吸血研判
+  （`ipGroup` / `groupDeliveredBytes` / `suspicion` / `rules` / `action` / `observeOnly`，来自 `BtGuard::peer_insight`）。与 qBittorrent 的差距：
+  无增删 / 编辑 tracker、无强制重新汇报、无 peer 进度 / flags、tracker 无 seeds / leeches / 完成数（librqbit 不提供）。
+- **BT 防吸血**（`bt_guard/`，经 rqbit fork 的 `PeerPolicy` 钩子接入 `SharedBtSession::new`）：规则、处置阶梯、分层封禁、持久化与空闲静默约束见
+  `ops.md`「已实现（BT 防吸血）」条；改 rqbit fork 先在 `fluxdown/peer-policy` 分支提交再更新根 `Cargo.toml` 的 rev。
 - **peer 国旗**（`geoip.rs`，对齐 qBittorrent）：DB-IP「国家 lite」`.mmdb`（CC BY 4.0，关于页署名）+ 自带最小 MaxMind DB 读取器（零依赖，24/28/32 位记录，
   真实库 IPv4/IPv6 回归见 `FLUXDOWN_TEST_MMDB`）。有人查看 peer 列表（`bt_status`）才触发 `ensure_background`：当月文件 `<data_dir>/geoip/dbip-country-lite-YYYY-MM.mmdb`
   不在就经统一出口（`egress::RoutedClients`）下载 `https://download.db-ip.com/free/<name>.gz`（当月未发布回退上月），解压校验后原子落盘并清旧文件，失败 1 小时内不重试；
