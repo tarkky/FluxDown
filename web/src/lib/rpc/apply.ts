@@ -744,6 +744,9 @@ function applyDaemonEventTo(draft: DaemonDraft, event: DaemonEvent): void {
     case 'pluginViewFrame':
     case 'pluginViewClosed':
     case 'pluginToast':
+    case 'btGuardChanged':
+    case 'btGuardCloudRefreshWanted':
+    case 'btGuardEvidenceReady':
       return
     case 'snapshotReplaced':
       // 载荷是头：整体替换投影（含 `taskTotal` / `queueTotal`），任务表随后分页载入。

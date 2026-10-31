@@ -276,6 +276,18 @@ describe('apply cloud notify', () => {
     }
   })
 
+  test('bt guard events never change the snapshot', () => {
+    const snapshot = { cloudNotify: undefined, daemon: daemon([]) } as unknown as AgentSnapshot
+    const events: DaemonEvent[] = [
+      { type: 'btGuardChanged' },
+      { type: 'btGuardCloudRefreshWanted', data: { haveSequence: 7 } },
+      { type: 'btGuardEvidenceReady', data: { count: 3 } },
+    ]
+    for (const data of events) {
+      expect(applyAgentEvent(snapshot, { type: 'daemon', data })).toBe(snapshot)
+    }
+  })
+
   test('session end clears overview, loading and error but keeps local preferences and the public catalog', () => {
     const snapshot = { cloudNotify: state, cloudDevices: [], remoteTasks: [] } as unknown as AgentSnapshot
     const next = applyAgentEvent(snapshot, { type: 'sessionChanged', data: null })

@@ -130,7 +130,13 @@ export type DaemonEvent =
   /** 可移植视图会话已结束（`reason`：`closed` / `expired` / `pluginUnloaded` / `requested`）；不改变快照。 */
   | { type: 'pluginViewClosed'; data: { session: string; reason: string } }
   /** 插件经 `flux.ui.toast` 请求的提示；不改变快照。 */
-  | { type: 'pluginToast'; data: { identity: string; level: string; text: string } };
+  | { type: 'pluginToast'; data: { identity: string; level: string; text: string } }
+  /** BT 防吸血条目 / 状态变化：UI 据此重新拉取 `daemon.bt.guard.*`；不改变快照。 */
+  | { type: 'btGuardChanged' }
+  /** daemon 请求 agent 刷新云名单：只供 agent 消费，不转发给 UI，不改变快照。 */
+  | { type: 'btGuardCloudRefreshWanted'; data: { haveSequence: number } }
+  /** 待上报证据已累积：只供 agent 消费，不转发给 UI，不改变快照。 */
+  | { type: 'btGuardEvidenceReady'; data: { count: number } };
 
 /** agent 自有或转发的状态变化事件（`type` + `data` 相邻标记）。 */
 export type AgentEvent =

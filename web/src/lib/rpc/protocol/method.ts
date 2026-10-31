@@ -131,6 +131,16 @@ export const METHOD = {
   DAEMON_EGRESS_PLAN: 'daemon.egress.plan',
 
   DAEMON_BT_TRACKER_SUBSCRIPTION_REFRESH: 'daemon.bt.trackerSubscription.refresh',
+  DAEMON_BT_GUARD_STATE: 'daemon.bt.guard.state',
+  DAEMON_BT_GUARD_ENTRIES_LIST: 'daemon.bt.guard.entries.list',
+  DAEMON_BT_GUARD_ENTRIES_ADD: 'daemon.bt.guard.entries.add',
+  DAEMON_BT_GUARD_ENTRIES_REMOVE: 'daemon.bt.guard.entries.remove',
+  DAEMON_BT_GUARD_EVENTS_LIST: 'daemon.bt.guard.events.list',
+  DAEMON_BT_GUARD_EXPORT: 'daemon.bt.guard.export',
+  DAEMON_BT_GUARD_FILTER_SOURCES_REFRESH: 'daemon.bt.guard.filterSources.refresh',
+  // 以下 agent 内部方法，Web 不得调用。
+  DAEMON_BT_GUARD_CLOUD_APPLY: 'daemon.bt.guard.cloud.apply',
+  DAEMON_BT_GUARD_EVIDENCE_DRAIN: 'daemon.bt.guard.evidence.drain',
   DAEMON_ED2K_SERVER_SUBSCRIPTION_REFRESH: 'daemon.ed2k.serverSubscription.refresh',
   DAEMON_DIAGNOSTICS_DESCRIBE: 'daemon.diagnostics.describe',
   DAEMON_DIAGNOSTICS_PREPARE_LOG_EXPORT: 'daemon.diagnostics.prepareLogExport',
